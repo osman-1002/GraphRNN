@@ -509,10 +509,20 @@ def test_perturbed():
 
 if __name__ == '__main__':
     #test_perturbed()
-    #graphs = load_graph_list('graphs/' + 'GraphRNN_RNN_community4_4_128_train_0.dat')
-    #graphs = load_graph_list('graphs/' + 'GraphRNN_RNN_community4_4_128_pred_2500_1.dat')
-    graphs = load_graph_list('eval_results/mmsb/' + 'community41.dat')
+    
+    graphs = load_graph_list('graphs/' + 'GraphRNN_ATT_community4_4_128_train_0.dat')
+
     
     for i in range(0, 160, 16):
-        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/community4_' + str(i))
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/train/community_ATT_' + str(i))
+    
+    graphs = load_graph_list('graphs/' + 'GraphRNN_ATT_community4_4_128_test_0.dat')
 
+    
+    for i in range(0, 160, 16):
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/test/community_ATT_' + str(i))
+    
+    graphs = load_graph_list('graphs/' + 'GraphRNN_ATT_community4_4_128_pred_3_1.dat')
+
+    for i in range(0, 160, 16):
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/pred/community_ATT_3_1_' + str(i))
