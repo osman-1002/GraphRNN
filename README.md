@@ -3,9 +3,9 @@
 [Jiaxuan You](https://cs.stanford.edu/~jiaxuan/)\*, [Rex Ying](https://cs.stanford.edu/people/rexy/)\*, [Xiang Ren](http://www-bcf.usc.edu/~xiangren/), [William L. Hamilton](https://stanford.edu/~wleif/), [Jure Leskovec](https://cs.stanford.edu/people/jure/index.html), [GraphRNN: Generating Realistic Graphs with Deep Auto-regressive Model](https://arxiv.org/abs/1802.08773) (ICML 2018)
 
 ## Installation
-Install PyTorch following the instuctions on the [official website](https://pytorch.org/). The code has been tested over PyTorch 0.2.0 and 0.4.0 versions.
+Install PyTorch following the instuctions on the [official website](https://pytorch.org/). The code has been tested over PyTorch v1.13.1.
 ```bash
-conda install pytorch torchvision cuda90 -c pytorch
+conda install pytorch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1 pytorch-cuda=11.7 -c pytorch -c nvidia
 ```
 Then install the other dependencies.
 ```bash
@@ -28,8 +28,8 @@ For baseline models:
 * [Kronecker graph model](https://cs.stanford.edu/~jure/pubs/kronecker-jmlr10.pdf) is implemented in the SNAP software, which can be found in `https://github.com/snap-stanford/snap/tree/master/examples/krongen` (for generating Kronecker graphs), and `https://github.com/snap-stanford/snap/tree/master/examples/kronfit` (for learning parameters for the model).
 * MMSB is implemented using the EDWARD library (http://edwardlib.org/), and is located in
   `baselines`.
-* We implemented the DeepGMG model based on the instructions of their [paper](https://arxiv.org/abs/1803.03324) in `main_DeepGMG.py`.
-* We implemented the GraphVAE model based on the instructions of their [paper](https://arxiv.org/abs/1802.03480) in `baselines/graphvae`.
+* the DeepGMG model was implemented based on the instructions of their [paper](https://arxiv.org/abs/1803.03324) in `main_DeepGMG.py`.
+* the GraphVAE model was implemented based on the instructions of their [paper](https://arxiv.org/abs/1802.03480) in `baselines/graphvae`.
 
 Parameter setting:
 To adjust the hyper-parameter and input arguments to the model, modify the fields of `args.py`
@@ -55,8 +55,8 @@ Three types of distributions are chosen: degree distribution, clustering coeffic
 Both of which are implemented in `eval/stats.py`, using multiprocessing python
 module. One can easily extend the evaluation to compute MMD for other distribution of graphs.
 
-We also compute the orbit counts for each graph, represented as a high-dimensional data point. We then compute the MMD
-between the two _sets of sampled points_ using ORCA (see http://www.biolab.si/supp/orca/orca.html) at `eval/orca`. 
+the orbit counts for each graph is also computed, represented as a high-dimensional data point. the MMD
+between the two _sets of sampled points_ is then computed using ORCA (see http://www.biolab.si/supp/orca/orca.html) at `eval/orca`. 
 One first needs to compile ORCA by 
 ```bash
 g++ -O2 -std=c++11 -o orca orca.cpp` 
