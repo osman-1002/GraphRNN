@@ -3,7 +3,7 @@
 [Jiaxuan You](https://cs.stanford.edu/~jiaxuan/)\*, [Rex Ying](https://cs.stanford.edu/people/rexy/)\*, [Xiang Ren](http://www-bcf.usc.edu/~xiangren/), [William L. Hamilton](https://stanford.edu/~wleif/), [Jure Leskovec](https://cs.stanford.edu/people/jure/index.html), [GraphRNN: Generating Realistic Graphs with Deep Auto-regressive Model](https://arxiv.org/abs/1802.08773) (ICML 2018)
 
 ## Installation
-Install PyTorch following the instuctions on the [official website](https://pytorch.org/). The code has been tested over PyTorch v1.13.1.
+Install PyTorch following the instuctions on the [official website](https://pytorch.org/). The code has been tested over PyTorch v1.13.1 with Python 3.7.16.
 ```bash
 conda install pytorch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1 pytorch-cuda=11.7 -c pytorch -c nvidia
 ```
@@ -30,6 +30,116 @@ For baseline models:
   `baselines`.
 * the DeepGMG model was implemented based on the instructions of their [paper](https://arxiv.org/abs/1803.03324) in `main_DeepGMG.py`.
 * the GraphVAE model was implemented based on the instructions of their [paper](https://arxiv.org/abs/1802.03480) in `baselines/graphvae`.
+
+# What has been added?
+
+Although the `GRU_plain_with_attention` is yet to produce desired results, and is with some apparent problems in its output, these are the intended changes and how it differs from the original:
+
+##Comparison of `GRU_plain` and `GRU_plain_with_attention`
+
+
+## 1. **Attention Mechanism**
+- **in `GRU_plain_with_attention`**:
+  - Uses a custom `Attention` class to compute attention scores over the RNN outputs.
+  - Produces a context vector through a weighted sum of the RNN outputs.
+
+---
+
+## 2. **Layer Normalization**
+- **GRU_plain_with_attention**:
+  - Applies `LayerNorm` to the RNN outputs before proceeding further.
+
+---
+
+
+## 3. **Output Handling**
+- **GRU_plain**:
+  - Outputs the raw RNN output (or applies an output layer if `has_output=True`).
+- **GRU_plain_with_attention**:
+  - Uses the attention-derived `context_vector` as the primary output.
+  - Optionally passes the `context_vector` through an output layer if `has_output=True`.
+
+---
+
+## 4. **Initialization of Parameters**
+- Both classes initialize weights using Xavier initialization and biases with constant values.
+- The code for parameter initialization is almost identical.
+
+---
+
+## 5. **Changes in `forward` Method**
+| **Aspect**                 | **GRU_plain**                                | **GRU_plain_with_attention**               |
+|----------------------------|---------------------------------------------|-------------------------------------------|
+| **RNN Output**             | Directly uses the RNN output.               | Passes the RNN output through attention. |
+| **Normalization**          | Not applied.                                | Applies layer normalization.             |
+| **Attention Mechanism**    | Not present.                                | Computes attention scores and context vector. |
+| **Packed Sequences**       | Handles packed sequences.                   | Handles packed sequences similarly, with additional attention logic. |
+| **Output**                 | RNN output (or processed output).           | Attention-derived context vector (or processed output). |
+
+---
+
+## Differences Between `train_rnn_epoch_with_attention` and `train_rnn_epoch`
+
+
+---
+
+### 1. **Hidden State Handling**
+   - **With Attention (`train_rnn_epoch_with_attention`)**:
+     - The RNN's hidden state is manipulated by adding `hidden_null` for remaining layers after the initial hidden state.
+     - The model utilizes attention to compute context vectors and attention scores (`context_vector, attention_scores = rnn(x, pack=True, input_len=y_len)`).
+   
+   - **Without Attention (`train_rnn_epoch`)**:
+     - Hidden state handling is more straightforward, with the RNN output directly used as the hidden state for the output module.
+     - No explicit attention mechanism is applied.
+
+---
+
+### 2. **Forward Pass**
+   - **With Attention (`train_rnn_epoch_with_attention`)**:
+     - The model computes `context_vector` and `attention_scores` from the RNN output. 
+     - These are used as part of the hidden state in the output module: `output.hidden = torch.cat((context_vector, hidden_null), dim=0)`.
+   
+   - **Without Attention (`train_rnn_epoch`)**:
+     - The model directly computes the hidden state for the output module without any context vector or attention-based transformations.
+
+---
+
+### 3. **Graph Generation**
+   - **With Attention (`test_rnn_with_attention_epoch`)**:
+     - During testing, the attention mechanism influences the graph prediction by using the RNN's context vector and attention scores to guide the graph generation. Attention is involved in producing outputs over multiple time steps.
+   
+   - **Without Attention (`test_rnn_epoch`)**:
+     - The process of graph generation during testing is simpler and does not involve attention scores. The model directly generates graphs based on the RNN’s output at each time step.
+
+---
+
+### 4. **Attention Mechanism**
+   - **With Attention (`train_rnn_epoch_with_attention`)**:
+     - Explicit attention scores are used in the training process to modify the output prediction (`output_y_pred_step = output(output_x_step)`), and a sigmoid function is applied to the predictions to generate final outputs.
+   
+   - **Without Attention (`train_rnn_epoch`)**:
+     - There is no mention or use of attention scores. The model simply applies a sigmoid function to the RNN's output: `y_pred = F.sigmoid(y_pred)`.
+
+---
+
+
+### Summary Table
+
+| Feature                              | `train_rnn_epoch_with_attention`                                | `train_rnn_epoch`                                              |
+|--------------------------------------|------------------------------------------------------------------|---------------------------------------------------------------|
+| **Attention Mechanism**              | Used in both training and testing.                               | Not used.                                                     |
+| **Hidden State Handling**            | Modified by attention context vector.                           | Standard hidden state propagation without attention.           |
+| **Forward Pass**                      | Attention scores and context vectors influence predictions.     | Direct use of RNN output without attention.                    |
+| **Loss Calculation**                  | Involves attention-modified output.                             | Direct loss computation from the RNN output.                   |
+| **Graph Generation**                  | Attention is involved in generating graphs.                     | Direct graph generation without attention.                     |
+| **Output Handling**                   | Step-by-step prediction with attention.                         | Direct prediction without attention.                           |
+| **Sequence Packing**                 | Packing handled with attention scores.                          | Standard packing and padding of sequences.                     |
+
+---
+
+
+After stabilizing the current version, it is also planned to apply these implemetations to other rnn models.
+
 
 Parameter setting:
 To adjust the hyper-parameter and input arguments to the model, modify the fields of `args.py`
