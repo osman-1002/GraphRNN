@@ -20,7 +20,7 @@ import pickle
 from tensorboard_logger import configure, log_value
 import scipy.misc
 import time as tm
-
+import datetime
 from utils import *
 from model import *
 from data import *
@@ -101,7 +101,7 @@ def train_vae_epoch(epoch, args, rnn, output, data_loader,
         log_value('z_sgm_min_'+args.fname, z_sgm_min, epoch*args.batch_ratio + batch_idx)
         log_value('z_sgm_max_'+args.fname, z_sgm_max, epoch*args.batch_ratio + batch_idx)
 
-        loss_sum += loss.data[0]
+        loss_sum += loss.data
     return loss_sum/(batch_idx+1)
 
 def test_vae_epoch(epoch, args, rnn, output, test_batch_size=16, save_histogram=False, sample_time = 1):
@@ -221,12 +221,12 @@ def train_mlp_epoch(epoch, args, rnn, output, data_loader,
 
         if epoch % args.epochs_log==0 and batch_idx==0: # only output first batch's statistics
             print('Epoch: {}/{}, train loss: {:.6f}, graph type: {}, num_layer: {}, hidden: {}'.format(
-                epoch, args.epochs,loss.data[0], args.graph_type, args.num_layers, args.hidden_size_rnn))
+                epoch, args.epochs,loss.data, args.graph_type, args.num_layers, args.hidden_size_rnn))
 
         # logging
-        log_value('loss_'+args.fname, loss.data[0], epoch*args.batch_ratio+batch_idx)
+        log_value('loss_'+args.fname, loss.data, epoch*args.batch_ratio+batch_idx)
 
-        loss_sum += loss.data[0]
+        loss_sum += loss.data
     return loss_sum/(batch_idx+1)
 
 
@@ -378,12 +378,12 @@ def train_mlp_forward_epoch(epoch, args, rnn, output, data_loader):
 
         if epoch % args.epochs_log==0 and batch_idx==0: # only output first batch's statistics
             print('Epoch: {}/{}, train loss: {:.6f}, graph type: {}, num_layer: {}, hidden: {}'.format(
-                epoch, args.epochs,loss.data[0], args.graph_type, args.num_layers, args.hidden_size_rnn))
+                epoch, args.epochs,loss.data, args.graph_type, args.num_layers, args.hidden_size_rnn))
 
         # logging
-        log_value('loss_'+args.fname, loss.data[0], epoch*args.batch_ratio+batch_idx)
+        log_value('loss_'+args.fname, loss.data, epoch*args.batch_ratio+batch_idx)
 
-        loss_sum += loss.data[0]
+        loss_sum += loss.data
     return loss_sum/(batch_idx+1)
 
 
@@ -510,12 +510,12 @@ def train_rnn_epoch(epoch, args, rnn, output, data_loader,
 
         if epoch % args.epochs_log==0 and batch_idx==0: # only output first batch's statistics
             print('Epoch: {}/{}, train loss: {:.6f}, graph type: {}, num_layer: {}, hidden: {}'.format(
-                epoch, args.epochs,loss.data[0], args.graph_type, args.num_layers, args.hidden_size_rnn))
+                epoch, args.epochs,loss.data, args.graph_type, args.num_layers, args.hidden_size_rnn))
 
         # logging
-        log_value('loss_'+args.fname, loss.data[0], epoch*args.batch_ratio+batch_idx)
+        log_value('loss_'+args.fname, loss.data, epoch*args.batch_ratio+batch_idx)
         feature_dim = y.size(1)*y.size(2)
-        loss_sum += loss.data[0]*feature_dim
+        loss_sum += loss.data*feature_dim
     return loss_sum/(batch_idx+1)
 
 
@@ -549,6 +549,53 @@ def test_rnn_epoch(epoch, args, rnn, output, test_batch_size=16):
     # save graphs as pickle
     G_pred_list = []
     for i in range(test_batch_size):
+        
+        adj_pred = decode_adj(y_pred_long_data[i].cpu().numpy())
+        G_pred = get_graph(adj_pred) # get a graph from zero-padded adj
+        G_pred_list.append(G_pred)
+
+    return G_pred_list
+
+def test_rnn_with_attention_epoch(epoch, args, rnn, output, test_batch_size=16):
+    rnn.hidden = rnn.init_hidden(test_batch_size)
+    rnn.eval()
+    output.eval()
+
+    # generate graphs
+    max_num_node = int(args.max_num_node)
+    y_pred_long = Variable(torch.zeros(test_batch_size, max_num_node, args.max_prev_node)).cuda() # discrete prediction
+    x_step = Variable(torch.ones(test_batch_size,1,args.max_prev_node)).cuda()
+    for i in range(max_num_node):
+        h, hidden_state = rnn(x_step)
+        # output.hidden = h.permute(1,0,2)
+        # Handle single-layer and multi-layer RNN cases
+        if hidden_state.dim() == 2:  # Single-layer RNN
+            hidden_state = hidden_state.unsqueeze(0)  # Add layer dimension: (1, batch_size, hidden_size)
+            hidden_null = torch.zeros(
+                args.num_layers - 1, hidden_state.size(1), hidden_state.size(2)
+            ).cuda()
+        else:  # Multi-layer RNN
+            hidden_null = torch.zeros(
+                args.num_layers - 1, hidden_state.size(1), hidden_state.size(2)
+            ).cuda()
+        #hidden_null = Variable(torch.zeros(args.num_layers - 1, h.size(0), h.size(2))).cuda()
+        output.hidden = torch.cat((hidden_state, hidden_null), dim=0)
+        #output.hidden = torch.cat((h.permute(1,0,2), hidden_null),
+        #                           dim=0)  # num_layers, batch_size, hidden_size
+        x_step = Variable(torch.zeros(test_batch_size,1,args.max_prev_node)).cuda()
+        output_x_step = Variable(torch.ones(test_batch_size,1,1)).cuda()
+        for j in range(min(args.max_prev_node,i+1)):
+            output_y_pred_step = output(output_x_step)
+            output_x_step = sample_sigmoid_attention(output_y_pred_step, sample=True, sample_time=1)
+            x_step[:,:,j:j+1] = output_x_step
+            output.hidden = Variable(output.hidden.data).cuda()
+        y_pred_long[:, i:i + 1, :] = x_step
+        rnn.hidden = Variable(rnn.hidden.data).cuda()
+    y_pred_long_data = y_pred_long.data.long()
+
+    # save graphs as pickle
+    G_pred_list = []
+    for i in range(test_batch_size):
         adj_pred = decode_adj(y_pred_long_data[i].cpu().numpy())
         G_pred = get_graph(adj_pred) # get a graph from zero-padded adj
         G_pred_list.append(G_pred)
@@ -556,6 +603,148 @@ def test_rnn_epoch(epoch, args, rnn, output, test_batch_size=16):
     return G_pred_list
 
 
+
+def train_rnn_epoch_with_attention(epoch, args, rnn, output, data_loader,
+                                   optimizer_rnn, optimizer_output,
+                                   scheduler_rnn, scheduler_output):
+    rnn.train()
+    output.train()
+    loss_sum = 0
+
+    for batch_idx, data in enumerate(data_loader):
+        rnn.zero_grad()
+        output.zero_grad()
+        
+        # Extract data
+        x_unsorted = data['x'].float()
+        y_unsorted = data['y'].float()
+        y_len_unsorted = data['len']
+        
+        y_len_max = max(y_len_unsorted)
+        x_unsorted = x_unsorted[:, 0:y_len_max, :]
+        y_unsorted = y_unsorted[:, 0:y_len_max, :]
+
+        # Initialize RNN hidden state
+        rnn.hidden = rnn.init_hidden(batch_size=x_unsorted.size(0))
+
+        # Sort input
+        y_len, sort_index = torch.sort(y_len_unsorted, 0, descending=True)
+        y_len = y_len.numpy().tolist()
+        x = torch.index_select(x_unsorted, 0, sort_index)
+        y = torch.index_select(y_unsorted, 0, sort_index)
+
+        
+        # Pack the padded sequence
+        packed_y = pack_padded_sequence(y, y_len, batch_first=True, enforce_sorted=False).cuda()
+
+        # Now reverse y_reshape (i.e., the data) according to lengths
+        idx = [i for i in range(packed_y.data.size(0) - 1, -1, -1)]
+        idx = torch.LongTensor(idx).cuda()
+        y_reshape = packed_y.data.index_select(0, idx)
+
+        # Add extra dimension
+        y_reshape = y_reshape.view(y_reshape.size(0), y_reshape.size(1), 1)
+
+        # Define output_y
+        output_y = y_reshape  # Ensure output_y is assigned here
+
+        # Prepare input lengths for packing
+        output_y_len = np.array(y_len)  # y_len should be the sequence lengths of each sample in the batch
+
+        # Ensure the sequence lengths do not exceed y.size(2)
+        output_y_len = np.clip(output_y_len, 0, y.size(2))
+
+        # Ensure that output_y_len is a tensor of length batch_size
+        output_y_len = torch.tensor(output_y_len)  # Convert to tensor for compatibility with pack_padded_sequence
+        # Convert to Variables and move to GPU
+        x = Variable(x).cuda()
+        y = Variable(y).cuda()
+        
+        # Unpack the packed sequence
+        unpacked_y, lengths = pad_packed_sequence(packed_y, batch_first=True)
+        # Prepare tensors for the output module
+        ones_tensor = torch.ones(unpacked_y.size(0), 1, 1).cuda()
+        #print(f"Shape of ones_tensor: {ones_tensor.shape}")
+        #print(f"Shape of unpacked: {unpacked_y.shape}")
+        output_x = torch.cat((ones_tensor, unpacked_y[:, :-1, :1]), dim=1)
+        
+        #print(output_x.shape)
+        output_x = Variable(output_x).cuda()
+        output_y = Variable(unpacked_y).cuda()
+        
+        # Forward pass through RNN with attention
+        context_vector, attention_scores = rnn(x, pack=True, input_len=y_len)
+
+        # Create hidden_null for remaining layers
+        #print(h_data.shape)
+        num_layers = rnn.hidden.size(0)
+        hidden_null = torch.zeros(num_layers - 1, context_vector.size(1)).cuda()
+
+        
+        # Combine h_data and hidden_null
+        output.hidden = torch.cat((context_vector, hidden_null), dim=0)
+
+
+        
+        y_pred = output(output_x, pack=True, input_len=output_y_len)
+        if isinstance(y_pred, tuple):
+            y_pred = y_pred[0]  # Extract the output tensor
+        print(y_pred.shape)
+        # Apply sigmoid to the correct tensor
+        y_pred = torch.sigmoid(y_pred)
+        #print(y_pred.shape)
+
+        if y_pred.ndimension() == 2:
+            y_pred = y_pred.unsqueeze(1)  # Add seq_len dimension
+        seq_len = max(output_y_len)
+        if y_pred.size(1) < seq_len:
+            padding = seq_len - y_pred.size(1)
+            y_pred = F.pad(y_pred, (0, 0, 0, padding))  # Pad seq_len dimension
+        
+        y_pred = pack_padded_sequence(y_pred, output_y_len, batch_first=True)
+        y_pred = pad_packed_sequence(y_pred, batch_first=True)[0]
+        output_y = pack_padded_sequence(output_y,output_y_len,batch_first=True)
+        output_y = pad_packed_sequence(output_y,batch_first=True)[0]
+        # Debug output shapes
+        #print(f"Shape of y_pred before unpacking: {y_pred.shape}")
+        #print(f"Shape of output_y before unpacking: {output_y.shape}")
+        
+        # If unpacking is needed
+        # y_pred, _ = pad_packed_sequence(y_pred_packed, batch_first=True)
+        # output_y, _ = pad_packed_sequence(output_y_packed, batch_first=True)
+
+        # Debug output shapes
+        #print(f"Shape of y_pred after unpacking: {y_pred.shape}")
+        #print(f"Shape of output_y after unpacking: {output_y.shape}")
+        # Compute loss
+        y_pred_ = y_pred.expand(-1, -1, output_y.size(2))  # Expand last dimension to match output_y
+        loss = binary_cross_entropy_weight(y_pred_, output_y)
+        #print(loss)
+        loss.backward()
+
+        # Apply gradient clipping
+        #torch.nn.utils.clip_grad_norm_(rnn.parameters(), max_norm=5.0)
+
+        # Update optimizers and schedulers
+        optimizer_output.step()
+        optimizer_rnn.step()
+        scheduler_output.step()
+        scheduler_rnn.step()
+
+        # Log training progress
+        if  batch_idx == 0: #epoch % args.epochs_log == 0 and
+            print(f'Epoch: {epoch}/{args.epochs}, '
+                f'train loss: {loss.item():.6f}, '
+                f'graph type: {args.graph_type}, '
+                f'num_layer: {args.num_layers}, '
+                f'hidden: {args.hidden_size_rnn}')
+
+        # Logging
+        log_value(f'loss_{args.fname}', loss.item(), epoch * args.batch_ratio + batch_idx)
+        feature_dim = y.size(1) * y.size(2)
+        loss_sum += loss.item() * feature_dim
+
+    return loss_sum / (batch_idx + 1)
 
 
 def train_rnn_forward_epoch(epoch, args, rnn, output, data_loader):
@@ -631,13 +820,13 @@ def train_rnn_forward_epoch(epoch, args, rnn, output, data_loader):
 
         if epoch % args.epochs_log==0 and batch_idx==0: # only output first batch's statistics
             print('Epoch: {}/{}, train loss: {:.6f}, graph type: {}, num_layer: {}, hidden: {}'.format(
-                epoch, args.epochs,loss.data[0], args.graph_type, args.num_layers, args.hidden_size_rnn))
+                epoch, args.epochs,loss.data, args.graph_type, args.num_layers, args.hidden_size_rnn))
 
         # logging
-        log_value('loss_'+args.fname, loss.data[0], epoch*args.batch_ratio+batch_idx)
+        log_value('loss_'+args.fname, loss.data, epoch*args.batch_ratio+batch_idx)
         # print(y_pred.size())
         feature_dim = y_pred.size(0)*y_pred.size(1)
-        loss_sum += loss.data[0]*feature_dim/y.size(0)
+        loss_sum += loss.data*feature_dim/y.size(0)
     return loss_sum/(batch_idx+1)
 
 
@@ -656,6 +845,13 @@ def train(args, dataset_train, rnn, output):
     else:
         epoch = 1
 
+
+    # Ensure that the model and data are on the same device
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+    # Move the model to the correct device
+    rnn.to(device)
+    output.to(device)
     # initialize optimizer
     optimizer_rnn = optim.Adam(list(rnn.parameters()), lr=args.lr)
     optimizer_output = optim.Adam(list(output.parameters()), lr=args.lr)
@@ -666,6 +862,9 @@ def train(args, dataset_train, rnn, output):
     # start main loop
     time_all = np.zeros(args.epochs)
     while epoch<=args.epochs:
+        print(epoch)
+        now = datetime.datetime.now()
+        print(now.time())
         time_start = tm.time()
         # train
         if 'GraphRNN_VAE' in args.note:
@@ -680,24 +879,34 @@ def train(args, dataset_train, rnn, output):
             train_rnn_epoch(epoch, args, rnn, output, dataset_train,
                             optimizer_rnn, optimizer_output,
                             scheduler_rnn, scheduler_output)
+        elif 'GraphRNN_ATT' in args.note:
+            train_rnn_epoch_with_attention(epoch, args, rnn, output, dataset_train,
+                            optimizer_rnn, optimizer_output,
+                            scheduler_rnn, scheduler_output)
         time_end = tm.time()
         time_all[epoch - 1] = time_end - time_start
         # test
         if epoch % args.epochs_test == 0 and epoch>=args.epochs_test_start:
+            print(epoch)
             for sample_time in range(1,4):
                 G_pred = []
                 while len(G_pred)<args.test_total_size:
+                    print(len(G_pred))
                     if 'GraphRNN_VAE' in args.note:
                         G_pred_step = test_vae_epoch(epoch, args, rnn, output, test_batch_size=args.test_batch_size,sample_time=sample_time)
                     elif 'GraphRNN_MLP' in args.note:
                         G_pred_step = test_mlp_epoch(epoch, args, rnn, output, test_batch_size=args.test_batch_size,sample_time=sample_time)
                     elif 'GraphRNN_RNN' in args.note:
                         G_pred_step = test_rnn_epoch(epoch, args, rnn, output, test_batch_size=args.test_batch_size)
+                    elif 'GraphRNN_ATT' in args.note:
+                        G_pred_step = test_rnn_with_attention_epoch(epoch, args, rnn, output, test_batch_size=args.test_batch_size)
                     G_pred.extend(G_pred_step)
                 # save graphs
                 fname = args.graph_save_path + args.fname_pred + str(epoch) +'_'+str(sample_time) + '.dat'
                 save_graph_list(G_pred, fname)
-                if 'GraphRNN_RNN' in args.note:
+                if 'GraphRNN_RNN'  in args.note:
+                    break
+                elif 'GraphRNN_ATT' in args.note:
                     break
             print('test done, graphs saved')
 
@@ -758,3 +967,7 @@ def train_nll(args, dataset_train, dataset_test, rnn, output,graph_validate_len,
             f.write(str(nll_train)+','+str(nll_test)+'\n')
 
     print('NLL evaluation done')
+
+
+
+

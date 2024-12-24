@@ -634,7 +634,7 @@ if __name__ == '__main__':
     dir_prefix = args.dir_input
 
 
-    time_now = strftime("%Y-%m-%d %H:%M:%S", gmtime())
+    time_now = strftime("%Y%m%d-%H%M%S")
     if not os.path.isdir('logs/'):
         os.makedirs('logs/')
     logging.basicConfig(filename='logs/evaluate' + time_now + '.log', level=logging.INFO)
