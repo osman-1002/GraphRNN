@@ -1,8 +1,10 @@
 from train import *
+from encoder import GraphEncoder
 
 if __name__ == '__main__':
     # All necessary arguments are defined in args.py
     args = Args()
+
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.cuda)
     print('CUDA', args.cuda)
     print('File name prefix',args.fname)
@@ -91,53 +93,69 @@ if __name__ == '__main__':
         #         graph.remove_edge(edge[0],edge[1])
 
 
-    ### dataset initialization
+    # ## dataset initialization
+    # if 'nobfs' in args.note:
+    #     print('nobfs')
+    #     dataset = Graph_sequence_sampler_pytorch_nobfs(graphs_train, max_num_node=args.max_num_node)
+    #     args.max_prev_node = args.max_num_node-1
+    # if 'barabasi_noise' in args.graph_type:
+    #     print('barabasi_noise')
+    #     dataset = Graph_sequence_sampler_pytorch_canonical(graphs_train,max_prev_node=args.max_prev_node)
+    #     args.max_prev_node = args.max_num_node - 1
+    # else:
+    #     dataset = Graph_sequence_sampler_pytorch(graphs_train,max_prev_node=args.max_prev_node,max_num_node=args.max_num_node)
+    # sample_strategy = torch.utils.data.sampler.WeightedRandomSampler([1.0 / len(dataset) for i in range(len(dataset))],
+    #                                                                  num_samples=args.batch_size*args.batch_ratio, replacement=True)
+    # dataset_loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, num_workers=args.num_workers,
+    #                                            sampler=sample_strategy)
+    ## Prepare dataset loader
     if 'nobfs' in args.note:
-        print('nobfs')
         dataset = Graph_sequence_sampler_pytorch_nobfs(graphs_train, max_num_node=args.max_num_node)
-        args.max_prev_node = args.max_num_node-1
-    if 'barabasi_noise' in args.graph_type:
-        print('barabasi_noise')
-        dataset = Graph_sequence_sampler_pytorch_canonical(graphs_train,max_prev_node=args.max_prev_node)
-        args.max_prev_node = args.max_num_node - 1
+    elif 'barabasi_noise' in args.graph_type:
+        dataset = Graph_sequence_sampler_pytorch_canonical(graphs_train, max_prev_node=args.max_prev_node)
     else:
-        dataset = Graph_sequence_sampler_pytorch(graphs_train,max_prev_node=args.max_prev_node,max_num_node=args.max_num_node)
-    sample_strategy = torch.utils.data.sampler.WeightedRandomSampler([1.0 / len(dataset) for i in range(len(dataset))],
-                                                                     num_samples=args.batch_size*args.batch_ratio, replacement=True)
-    dataset_loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, num_workers=args.num_workers,
-                                               sampler=sample_strategy)
+        dataset = Graph_sequence_sampler_pytorch(graphs_train, max_prev_node=args.max_prev_node, max_num_node=args.max_num_node)
 
+    sampler = torch.utils.data.sampler.WeightedRandomSampler(
+        [1.0 / len(dataset) for _ in range(len(dataset))],
+        num_samples=args.batch_size * args.batch_ratio,
+        replacement=True
+    )
+    dataset_loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, num_workers=args.num_workers, sampler=sampler, collate_fn= custom_collate)
+    
+    dataset_ = Graph_sequence_sampler_pytorch(graphs_test, max_prev_node=args.max_prev_node, max_num_node=args.max_num_node)
+
+    sampler_ = torch.utils.data.sampler.WeightedRandomSampler(
+        [1.0 / len(dataset_) for _ in range(len(dataset_))],
+        num_samples=args.batch_size * args.batch_ratio,
+        replacement=True
+    )
+    dataset_test = torch.utils.data.DataLoader(dataset_, batch_size=args.batch_size, num_workers=args.num_workers, sampler=sampler_, collate_fn= custom_collate)
     ### model initialization
     ## Graph RNN VAE model
     # lstm = LSTM_plain(input_size=args.max_prev_node, embedding_size=args.embedding_size_lstm,
     #                   hidden_size=args.hidden_size, num_layers=args.num_layers).cuda()
 
-    if 'GraphRNN_VAE_conditional' in args.note:
-        rnn = GRU_plain(input_size=args.max_prev_node, embedding_size=args.embedding_size_rnn,
-                        hidden_size=args.hidden_size_rnn, num_layers=args.num_layers, has_input=True,
-                        has_output=False).cuda()
-        output = MLP_VAE_conditional_plain(h_size=args.hidden_size_rnn, embedding_size=args.embedding_size_output, y_size=args.max_prev_node).cuda()
-    elif 'GraphRNN_MLP' in args.note:
-        rnn = GRU_plain(input_size=args.max_prev_node, embedding_size=args.embedding_size_rnn,
-                        hidden_size=args.hidden_size_rnn, num_layers=args.num_layers, has_input=True,
-                        has_output=False).cuda()
-        output = MLP_plain(h_size=args.hidden_size_rnn, embedding_size=args.embedding_size_output, y_size=args.max_prev_node).cuda()
-    elif 'GraphRNN_RNN' in args.note:
-        rnn = GRU_plain(input_size=args.max_prev_node, embedding_size=args.embedding_size_rnn,
+    # Initialize models
+    encoder = GraphEncoder(input_dim=80, hidden_dim=args.hidden_size_rnn, 
+                           output_dim=args.hidden_size_rnn, num_layers=args.num_layers, 
+                           use_attention=False).cuda()
+
+    rnn = GRU_plain_dec(input_size=args.max_prev_node, embedding_size=args.embedding_size_rnn,
                         hidden_size=args.hidden_size_rnn, num_layers=args.num_layers, has_input=True,
                         has_output=True, output_size=args.hidden_size_rnn_output).cuda()
-        output = GRU_plain(input_size=1, embedding_size=args.embedding_size_rnn_output,
-                           hidden_size=args.hidden_size_rnn_output, num_layers=args.num_layers, has_input=True,
-                           has_output=True, output_size=1).cuda()
-    elif 'GraphRNN_ATT' in args.note:
-        rnn=GRU_plain_with_attention(input_size=args.max_prev_node, embedding_size=args.embedding_size_rnn,
-                        hidden_size=args.hidden_size_rnn, num_layers=args.num_layers, has_input=True,
-                        has_output=True, output_size=args.hidden_size_rnn_output).cuda()
-        output = GRU_plain_with_attention(input_size=1, embedding_size=args.embedding_size_rnn_output,
-                           hidden_size=args.hidden_size_rnn_output, num_layers=args.num_layers, has_input=True,
-                           has_output=True, output_size=1).cuda()
+    output = GRU_plain_dec(input_size=1, embedding_size=args.embedding_size_rnn_output,
+                        hidden_size=args.hidden_size_rnn_output, num_layers=args.num_layers, has_input=True,
+                        has_output=True, output_size=1).cuda()    
+        # Debugging: Print batch_data info in train_dec
+    for batch_data in dataset_loader:
+        print("Type of batch_data:", type(batch_data))
+        if isinstance(batch_data, dict):
+            print("batch_data keys:", batch_data.keys())
+            print("Sample content of batch_data:", {k: v.shape if hasattr(v, 'shape') else type(v) for k, v in batch_data.items()})
+        break  # Only print for the first batch
     ### start training
-    train(args, dataset_loader, rnn, output)
+    train_dec(args, dataset_loader, dataset_test, encoder, rnn, output)
 
     ### graph completion
     # train_graph_completion(args,dataset_loader,rnn,output)

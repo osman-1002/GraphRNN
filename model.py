@@ -255,6 +255,96 @@ def sample_sigmoid_supervised_simple(y_pred, y, current, y_len, sample_time=2):
 # n: noise for generator
 # l: whether an output is real or not, binary
 
+# class GRU_plain_with_attention(nn.Module):
+#     def __init__(self, input_size, embedding_size, hidden_size, num_layers, 
+#                  has_input=True, has_output=False, output_size=None):
+#         super(GRU_plain_with_attention, self).__init__()
+#         self.num_layers = num_layers
+#         self.hidden_size = hidden_size
+#         self.has_input = has_input
+#         self.has_output = has_output
+
+#         if has_input:
+#             self.input = nn.Linear(input_size, embedding_size)
+#             self.rnn = nn.GRU(input_size=embedding_size, hidden_size=hidden_size, 
+#                               num_layers=num_layers, batch_first=True)
+#         else:
+#             self.rnn = nn.GRU(input_size=input_size, hidden_size=hidden_size, 
+#                               num_layers=num_layers, batch_first=True)
+#         if has_output:
+#             self.output = nn.Sequential(
+#                 nn.Linear(128, embedding_size),  # Input size (128) matches context vector
+#                 nn.ReLU(),
+#                 nn.Linear(embedding_size, output_size)  # Output size is user-defined
+#             )
+
+
+#         self.attention = nn.Linear(hidden_size, 1)  # For computing attention scores
+#         self.relu = nn.ReLU()
+#         self.softmax = nn.Softmax(dim=1)
+
+#         # initialize
+#         self.hidden = None  # need initialize before forward run
+        
+#         for name, param in self.rnn.named_parameters():
+#             if 'bias' in name:
+#                 nn.init.constant_(param, 0.25)
+#             elif 'weight' in name:
+#                 nn.init.xavier_uniform_(param, gain=nn.init.calculate_gain('sigmoid'))
+#         for m in self.modules():
+#             if isinstance(m, nn.Linear):
+#                 nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+
+#     def init_hidden(self, batch_size):
+#         return Variable(torch.zeros(self.num_layers, batch_size, self.hidden_size)).cuda()
+
+#     def forward(self, input_raw, pack=False, input_len=None):
+#         if self.has_input:
+#             if isinstance(input_raw, PackedSequence):
+#                 input_raw, _ = pad_packed_sequence(input_raw, batch_first=True)
+#             print("Input to self.input:", input_raw.shape)
+            
+#             # Ensure input is reshaped correctly before passing to the self.input layer
+#             if input_raw.dim() == 2:  # If it's a 2D tensor (batch_size, input_size)
+#                 input_raw = input_raw.unsqueeze(1)  # Add sequence length dimension (batch_size, seq_len=1, input_size)
+#             elif input_raw.dim() == 3:  # If it's a 3D tensor (batch_size, seq_len, input_size)
+#                pass  # Already in the correct shape
+            
+#             input = self.input(input_raw)
+#             input = self.relu(input)
+#         else:
+#             input = input_raw
+#         if pack:
+#             input = pack_padded_sequence(input, input_len, batch_first=True)
+#         output_raw, self.hidden = self.rnn(input, self.hidden)
+#         if pack:
+#             output_raw, _ = pad_packed_sequence(output_raw, batch_first=True)
+
+#         # Attention mechanism
+#         attention_scores = self.attention(output_raw)  # Shape: (batch_size, seq_len, 1)
+#         print("Attention scores shape:", attention_scores.shape)
+#         attention_weights = self.softmax(attention_scores)  # Shape: (batch_size, seq_len, 1)
+#         print("Attention weights shape:", attention_weights.shape)
+#         context_vector = torch.sum(attention_weights * output_raw, dim=1)  # Shape: (batch_size, hidden_size)
+#         print("Context vector shape:", context_vector.shape)
+#         print("Expected input size for output layer:", self.output[0].in_features)
+        
+#         print("Context vector shape before output layer:", context_vector.shape)
+
+#         if context_vector.dim() == 1:
+#             context_vector = context_vector.unsqueeze(0)  # Add batch dimension if missing
+
+#         if context_vector.size(1) != 128:
+#             raise ValueError(f"Expected context vector with size [batch_size, 128], but got {context_vector.shape}")
+
+#         if self.has_output:
+#             print("Input to output layer:", context_vector.shape)  # Debug context vector shape
+#             output_raw = self.output(context_vector)
+#         else:
+#             output_raw = context_vector
+
+#         return output_raw, attention_weights  # Returning attention weights for interpretability
+
 # plain LSTM model
 class LSTM_plain(nn.Module):
     def __init__(self, input_size, embedding_size, hidden_size, num_layers, has_input=True, has_output=False, output_size=None):
@@ -349,9 +439,15 @@ class GRU_plain(nn.Module):
 
     def forward(self, input_raw, pack=False, input_len=None):
         if self.has_input:
+            print("Shape of input_raw:", input_raw.shape)  # Should be (batch_size, *, 80)
+            print("Expected weight shape:", self.input.weight.shape)  # Should be (80, 64)
+
             input = self.input(input_raw)
             input = self.relu(input)
         else:
+            print("Shape of input_raw:", input_raw.shape)  # Should be (batch_size, *, 80)
+            print("Expected weight shape:", self.input.weight.shape)  # Should be (80, 64)
+
             input = input_raw
         if pack:
             input = pack_padded_sequence(input, input_len, batch_first=True)
@@ -363,10 +459,109 @@ class GRU_plain(nn.Module):
         # return hidden state at each time step
         return output_raw
 
+class GRU_plain_dec(nn.Module):
+    def __init__(self, input_size, embedding_size, hidden_size, num_layers, output_size, has_input=True, has_output=True):
+        super(GRU_plain_dec, self).__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.has_input = has_input
+        self.has_output = has_output
+
+        # Input layer to project input_size to embedding_size
+        if has_input:
+            self.input = nn.Linear(input_size, embedding_size)
+        else:
+            self.input = None
+
+        # GRU layer for processing sequences
+        self.rnn = nn.GRU(input_size=embedding_size, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
+
+        # Output layer to project hidden states to output_size
+        if has_output:
+            self.output = nn.Sequential(
+                nn.Linear(hidden_size, embedding_size),
+                nn.ReLU(),
+                nn.Linear(embedding_size, output_size)
+            )
+        else:
+            self.output = None
+
+        # Activation function
+        self.relu = nn.ReLU()
+
+        # Initialize hidden state
+        self.hidden = None
+
+        # Parameter initialization
+        for name, param in self.rnn.named_parameters():
+            if 'bias' in name:
+                nn.init.constant_(param, 0.25)
+            elif 'weight' in name:
+                nn.init.xavier_uniform_(param, gain=nn.init.calculate_gain('sigmoid'))
+
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+
+    # def init_hidden(self, batch_size, device):
+    #     # Initialize hidden state with zeros
+    #     return torch.zeros(self.num_layers, batch_size, self.hidden_size).to(device)
+    def init_hidden(self, batch_size, device):
+        return torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+    def forward(self, input_raw, graph_embedding, pack=False, input_len=None):
+        # Prepare input
+        if self.has_input:
+            input = self.input(input_raw)
+            input = self.relu(input)
+        else:
+            input = input_raw
+
+        # Expand graph embedding to match sequence length
+        batch_size, seq_len, _ = input.shape
+        #print("Shape of graph_embedding before unsqueeze:", graph_embedding.shape)
+        if graph_embedding.dim() == 2:  # Ensure it has the correct number of dimensions
+            graph_embedding = graph_embedding.unsqueeze(1).expand(-1, seq_len, -1)
+        
+        # Concatenate graph embedding with input
+        graph_embedding = graph_embedding.expand(input.size(0), -1, -1)
+        # print("Shape of input:", input.shape)  # Expected: [batch_size, seq_len, feature_size]
+        # print("Shape of graph_embedding:", graph_embedding.shape)  # Expected: [batch_size, 1, hidden_size]
+        # input = torch.cat([input, graph_embedding], dim=-1)
+        # projection = nn.Linear(192, 64).to(input.device)
+        input = graph_embedding
+        # Create projection layer dynamically based on input size
+        input_size = input.shape[-1]  # Get the last dimension of input dynamically
+        output_size = min(64, input_size // 2)  # Example: half the input size but not more than 64
+        projection = nn.Linear(input_size, output_size).to(input.device)
+        #projection = nn.Linear(128, 64).to(input.device)
+        input = projection(input)
+
+
+        # input = torch.cat([input, graph_embedding], dim=-1)
+
+        # Pack sequences if necessary
+        if pack:
+            input = pack_padded_sequence(input, input_len, batch_first=True)
+
+        # Forward pass through GRU
+        output_raw, self.hidden = self.rnn(input, self.hidden)
+
+        # Unpack sequences if necessary
+        if pack:
+            output_raw = pad_packed_sequence(output_raw, batch_first=True)[0]
+
+        # Forward pass through output layer
+        if self.has_output:
+            output_raw = self.output(output_raw)
+
+        return output_raw
+
 class Attention(nn.Module):
     def __init__(self, hidden_size):
         super(Attention, self).__init__()
         self.attention_weights = nn.Linear(hidden_size, 1)
+        # Define the projection layer to match the expected hidden size (128)
+        self.projection_layer = nn.Linear(128, 128)  # Transform 16 -> 128
 
     def forward(self, rnn_output):
         """
@@ -378,16 +573,28 @@ class Attention(nn.Module):
             rnn_output, _ = pad_packed_sequence(rnn_output, batch_first=True)
 
         # Compute attention scores
-        scores = self.attention_weights(rnn_output)
-        scores = scores.squeeze(-1) 
+        scores = self.attention_weights(rnn_output)  # Shape: [batch_size, seq_len, 1]
+        scores = scores.squeeze(-1)  # Shape: [batch_size, seq_len]
 
         # Normalize attention scores using softmax
-        attention_weights = F.softmax(scores, dim=1)
+        attention_weights = F.softmax(scores, dim=1)  # Shape: [batch_size, seq_len]
 
         # Compute the context vector by performing a weighted sum of the RNN outputs
-        context_vector = torch.sum(attention_weights.unsqueeze(2) * rnn_output, dim=1)
+        context_vector = torch.sum(attention_weights.unsqueeze(2) * rnn_output, dim=1)  # Shape: [batch_size, hidden_size]
 
         return context_vector, scores
+
+
+# Example usage
+if __name__ == "__main__":
+    batch_size = 4
+    encoder_output = torch.randn(batch_size, 128)  # Fake encoder output
+
+    decoder = GraphRNNDecoder(input_dim=128, hidden_dim=64, output_dim=1)
+    nodes, edges = decoder(encoder_output, max_nodes=5)
+
+    print("Generated Nodes Shape:", nodes.shape)
+    print("Generated Edges Shape:", edges.shape)
 
 class GRU_plain_with_attention(nn.Module):
     def __init__(self, input_size, embedding_size, hidden_size, num_layers, has_input=True, has_output=False, output_size=None):
@@ -433,14 +640,19 @@ class GRU_plain_with_attention(nn.Module):
 
     def forward(self, input_raw, pack=False, input_len=None):
         if self.has_input:
+            print("Shape of input_raw:", input_raw.shape)  # Should be (batch_size, *, 80)
+            print("Expected weight shape:", self.input.weight.shape)  # Should be (80, 64)
             input = self.input(input_raw)
             input = self.relu(input)
         else:
+            print("Shape of input_raw:", input_raw.shape)  # Should be (batch_size, *, 80)
+            print("Expected weight shape:", self.input.weight.shape)  # Should be (80, 64)
             input = input_raw
         self.hidden = self.init_hidden(batch_size=32)
         
         if pack:
             input = pack_padded_sequence(input, input_len, batch_first=True)
+        #batch_size, seq_len, hidden_size = output_raw.size()  # Get the correct batch size from output_raw
         #print(f"Shape of self.hidden before RNN: {self.hidden.size()}")
 
         output_raw, self.hidden = self.rnn(input, self.hidden)
@@ -451,11 +663,14 @@ class GRU_plain_with_attention(nn.Module):
        
 
         # Now apply attention on the unpacked sequence (output_raw is now a tensor, not PackedSequence)
-        context_vector, attention_scores = self.attention(output_raw) 
+        context_vector, attention_scores = self.attention(output_raw)  # context_vector: (batch_size, hidden_size)
     
         # Apply Layer Normalization
         output_raw = self.layer_norm(output_raw)
         #print(output_raw.shape)  # Check the shape of rnn_output
+        
+        # # Apply attention
+        # context_vector, attention_scores = self.attention(output_raw)  # context_vector: (batch_size, hidden_size)
 
 
         if self.has_output:
@@ -465,79 +680,20 @@ class GRU_plain_with_attention(nn.Module):
         return context_vector, attention_scores
 
 
-# a deterministic linear output
-class MLP_plain(nn.Module):
-    def __init__(self, h_size, embedding_size, y_size):
-        super(MLP_plain, self).__init__()
-        self.deterministic_output = nn.Sequential(
-            nn.Linear(h_size, embedding_size),
-            nn.ReLU(),
-            nn.Linear(embedding_size, y_size)
-        )
+ # Unpack the sequence if it's packed
+        #output_raw, lengths = pad_packed_sequence(output_raw, batch_first=True)
+        #print(output_raw.shape)  # Check the shape of rnn_output
+        # Apply attention
+        #context_vector, attention_scores = self.attention(output_raw)  # context_vector: (batch_size, hidden_size)
+        # if pack:
+        #     output_raw = pad_packed_sequence(output_raw, batch_first=True)[0]
+        
+        #print(output_raw.shape)  # Check the shape of rnn_output
+        
+        # Extract batch_size and seq_len dynamically from output_raw shape
+        #batch_size, seq_len, hidden_size = output_raw.size()
 
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                m.weight.data = init.xavier_uniform(m.weight.data, gain=nn.init.calculate_gain('relu'))
 
-    def forward(self, h):
-        y = self.deterministic_output(h)
-        return y
-
-# a deterministic linear output, additional output indicates if the sequence should continue grow
-class MLP_token_plain(nn.Module):
-    def __init__(self, h_size, embedding_size, y_size):
-        super(MLP_token_plain, self).__init__()
-        self.deterministic_output = nn.Sequential(
-            nn.Linear(h_size, embedding_size),
-            nn.ReLU(),
-            nn.Linear(embedding_size, y_size)
-        )
-        self.token_output = nn.Sequential(
-            nn.Linear(h_size, embedding_size),
-            nn.ReLU(),
-            nn.Linear(embedding_size, 1)
-        )
-
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                m.weight.data = init.xavier_uniform(m.weight.data, gain=nn.init.calculate_gain('relu'))
-
-    def forward(self, h):
-        y = self.deterministic_output(h)
-        t = self.token_output(h)
-        return y,t
-
-# a deterministic linear output (update: add noise)
-class MLP_VAE_plain(nn.Module):
-    def __init__(self, h_size, embedding_size, y_size):
-        super(MLP_VAE_plain, self).__init__()
-        self.encode_11 = nn.Linear(h_size, embedding_size) # mu
-        self.encode_12 = nn.Linear(h_size, embedding_size) # lsgms
-
-        self.decode_1 = nn.Linear(embedding_size, embedding_size)
-        self.decode_2 = nn.Linear(embedding_size, y_size) # make edge prediction (reconstruct)
-        self.relu = nn.ReLU()
-
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                m.weight.data = init.xavier_uniform(m.weight.data, gain=nn.init.calculate_gain('relu'))
-
-    def forward(self, h):
-        # encoder
-        z_mu = self.encode_11(h)
-        z_lsgms = self.encode_12(h)
-        # reparameterize
-        z_sgm = z_lsgms.mul(0.5).exp_()
-        eps = Variable(torch.randn(z_sgm.size())).cuda()
-        z = eps*z_sgm + z_mu
-        # decoder
-        y = self.decode_1(z)
-        y = self.relu(y)
-        y = self.decode_2(y)
-        return y, z_mu, z_lsgms
-
-# a deterministic linear output (update: add noise)
-class MLP_VAE_conditional_plain(nn.Module):
     def __init__(self, h_size, embedding_size, y_size):
         super(MLP_VAE_conditional_plain, self).__init__()
         self.encode_11 = nn.Linear(h_size, embedding_size)  # mu
