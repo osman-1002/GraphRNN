@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch.autograd import Variable
 import matplotlib.pyplot as plt
 from random import shuffle
-
+from torch.nn.utils.rnn import pad_sequence
 import networkx as nx
 import pickle as pkl
 import scipy.sparse as sp
@@ -383,6 +383,109 @@ def test_encode_decode_adj_full():
 
 
 ########## use pytorch dataloader
+# class Graph_sequence_sampler_pytorch(torch.utils.data.Dataset):
+#     def __init__(self, G_list, max_num_node=None, max_prev_node=None, iteration=20000):
+#         self.adj_all = []
+#         self.len_all = []
+#         for G in G_list:
+#             self.adj_all.append(np.asarray(nx.to_numpy_matrix(G)))
+#             self.len_all.append(G.number_of_nodes())
+#         if max_num_node is None:
+#             self.n = max(self.len_all)
+#         else:
+#             self.n = max_num_node
+#         if max_prev_node is None:
+#             print('calculating max previous node, total iteration: {}'.format(iteration))
+#             self.max_prev_node = max(self.calc_max_prev_node(iter=iteration))
+#             print('max previous node: {}'.format(self.max_prev_node))
+#         else:
+#             self.max_prev_node = max_prev_node
+
+#         # self.max_prev_node = max_prev_node
+
+#         # # sort Graph in descending order
+#         # len_batch_order = np.argsort(np.array(self.len_all))[::-1]
+#         # self.len_all = [self.len_all[i] for i in len_batch_order]
+#         # self.adj_all = [self.adj_all[i] for i in len_batch_order]
+#     def __len__(self):
+#         return len(self.adj_all)
+#     def __getitem__(self, idx):
+#         adj_copy = self.adj_all[idx].copy()
+#         x_batch = np.zeros((self.n, self.max_prev_node))  # here zeros are padded for small graph
+#         x_batch[0,:] = 1 # the first input token is all ones
+#         y_batch = np.zeros((self.n, self.max_prev_node))  # here zeros are padded for small graph
+#         # generate input x, y pairs
+#         len_batch = adj_copy.shape[0]
+#         x_idx = np.random.permutation(adj_copy.shape[0])
+#         adj_copy = adj_copy[np.ix_(x_idx, x_idx)]
+#         adj_copy_matrix = np.asmatrix(adj_copy)
+#         G = nx.from_numpy_matrix(adj_copy_matrix)
+#         # then do bfs in the permuted G
+#         start_idx = np.random.randint(adj_copy.shape[0])
+#         x_idx = np.array(bfs_seq(G, start_idx))
+#         adj_copy = adj_copy[np.ix_(x_idx, x_idx)]
+#         adj_encoded = encode_adj(adj_copy.copy(), max_prev_node=self.max_prev_node)
+#         # get x and y and adj
+#         # for small graph the rest are zero padded
+#         y_batch[0:adj_encoded.shape[0], :] = adj_encoded
+#         x_batch[1:adj_encoded.shape[0] + 1, :] = adj_encoded
+#         return {'x':x_batch,'y':y_batch, 'len':len_batch}
+
+#     def calc_max_prev_node(self, iter=20000,topk=10):
+#         max_prev_node = []
+#         for i in range(iter):
+#             if i % (iter / 5) == 0:
+#                 print('iter {} times'.format(i))
+#             adj_idx = np.random.randint(len(self.adj_all))
+#             adj_copy = self.adj_all[adj_idx].copy()
+#             # print('Graph size', adj_copy.shape[0])
+#             x_idx = np.random.permutation(adj_copy.shape[0])
+#             adj_copy = adj_copy[np.ix_(x_idx, x_idx)]
+#             adj_copy_matrix = np.asmatrix(adj_copy)
+#             G = nx.from_numpy_matrix(adj_copy_matrix)
+#             # then do bfs in the permuted G
+#             start_idx = np.random.randint(adj_copy.shape[0])
+#             x_idx = np.array(bfs_seq(G, start_idx))
+#             adj_copy = adj_copy[np.ix_(x_idx, x_idx)]
+#             # encode adj
+#             adj_encoded = encode_adj_flexible(adj_copy.copy())
+#             max_encoded_len = max([len(adj_encoded[i]) for i in range(len(adj_encoded))])
+#             max_prev_node.append(max_encoded_len)
+#         max_prev_node = sorted(max_prev_node)[-1*topk:]
+#         return max_prev_node
+
+def custom_collate(batch):
+    import torch
+
+    # Extract individual components
+    x = pad_sequence([item['x'] for item in batch], batch_first=True, padding_value=0)
+    y = pad_sequence([item['y'] for item in batch], batch_first=True, padding_value=0)
+    batch_tensor = pad_sequence([item['batch'] for item in batch], batch_first=True, padding_value=-1)
+    edge_seq = pad_sequence([item['edge_seq'] for item in batch], batch_first=True, padding_value=0)
+    lengths = torch.tensor([item['len'] for item in batch], dtype=torch.long)
+
+    # Flatten edge_index and adjust node indices
+    edge_index_list = []
+    node_offset = 0
+    for i, item in enumerate(batch):
+        edge_index = item['edge_index']
+        # Adjust node indices for the batch
+        adjusted_edge_index = edge_index + node_offset
+        edge_index_list.append(adjusted_edge_index)
+        node_offset += item['x'].size(0)  # Increment offset by number of nodes in the graph
+
+    # Concatenate all edge indices
+    edge_index = torch.cat(edge_index_list, dim=1)
+
+    return {
+        'x': x,
+        'y': y,
+        'edge_index': edge_index,
+        'batch': batch_tensor,
+        'edge_seq': edge_seq,
+        'len': lengths
+    }
+
 class Graph_sequence_sampler_pytorch(torch.utils.data.Dataset):
     def __init__(self, G_list, max_num_node=None, max_prev_node=None, iteration=20000):
         self.adj_all = []
@@ -401,18 +504,13 @@ class Graph_sequence_sampler_pytorch(torch.utils.data.Dataset):
         else:
             self.max_prev_node = max_prev_node
 
-        # self.max_prev_node = max_prev_node
-
-        # # sort Graph in descending order
-        # len_batch_order = np.argsort(np.array(self.len_all))[::-1]
-        # self.len_all = [self.len_all[i] for i in len_batch_order]
-        # self.adj_all = [self.adj_all[i] for i in len_batch_order]
     def __len__(self):
         return len(self.adj_all)
+
     def __getitem__(self, idx):
         adj_copy = self.adj_all[idx].copy()
         x_batch = np.zeros((self.n, self.max_prev_node))  # here zeros are padded for small graph
-        x_batch[0,:] = 1 # the first input token is all ones
+        x_batch[0,:] = 1  # the first input token is all ones
         y_batch = np.zeros((self.n, self.max_prev_node))  # here zeros are padded for small graph
         # generate input x, y pairs
         len_batch = adj_copy.shape[0]
@@ -420,41 +518,67 @@ class Graph_sequence_sampler_pytorch(torch.utils.data.Dataset):
         adj_copy = adj_copy[np.ix_(x_idx, x_idx)]
         adj_copy_matrix = np.asmatrix(adj_copy)
         G = nx.from_numpy_matrix(adj_copy_matrix)
-        # then do bfs in the permuted G
+        
+        # Then do BFS in the permuted G
         start_idx = np.random.randint(adj_copy.shape[0])
         x_idx = np.array(bfs_seq(G, start_idx))
         adj_copy = adj_copy[np.ix_(x_idx, x_idx)]
         adj_encoded = encode_adj(adj_copy.copy(), max_prev_node=self.max_prev_node)
-        # get x and y and adj
-        # for small graph the rest are zero padded
+
+        # Get x and y and adj
         y_batch[0:adj_encoded.shape[0], :] = adj_encoded
         x_batch[1:adj_encoded.shape[0] + 1, :] = adj_encoded
-        return {'x':x_batch,'y':y_batch, 'len':len_batch}
+        
+        # Generate edge_index (convert graph to sparse edge representation)
+        edge_index = np.array(list(G.edges())).T  # Get edges from the graph as a numpy array
+        
+        edge_index = torch.tensor(edge_index, dtype=torch.long)  # Convert to torch tensor
+        edge_index = edge_index.contiguous()  # Ensure contiguous memory layout
 
-    def calc_max_prev_node(self, iter=20000,topk=10):
+        # Generate batch info (assuming each graph is treated as a separate batch)
+        batch = torch.zeros(len(G.nodes()), dtype=torch.long)  # All nodes belong to a single graph in this batch
+        # Generate edge_seq (This is a sequence of edges, possibly from BFS traversal)
+        edge_seq = self.generate_edge_sequence(G)
+        edge_seq = torch.tensor(edge_seq, dtype=torch.long)  # Convert to tensor
+        
+        return {
+            'x': torch.tensor(x_batch, dtype=torch.float32),
+            'y': torch.tensor(y_batch, dtype=torch.float32),
+            'len': torch.tensor([len_batch], dtype=torch.long),  # Make len_batch a 1-element tensor
+            'edge_index': edge_index.clone().detach(),#torch.tensor(edge_index, dtype=torch.long),  # Assuming it contains indices
+            'batch': batch.clone().detach(), #torch.tensor(batch, dtype=torch.long),  # Assuming it contains indices
+            'edge_seq': edge_seq.clone().detach() #torch.tensor(edge_seq, dtype=torch.float32)  # Adjust dtype based on your data
+            
+        }
+
+    def generate_edge_sequence(self, G):
+        """
+        Generate a sequence of edges, e.g., using a traversal method like BFS or DFS.
+        """
+        edge_seq = []
+        for u, v in G.edges():
+            edge_seq.append([u, v])  # Each edge is represented as a pair of nodes
+        return edge_seq
+    
+    def calc_max_prev_node(self, iter=20000, topk=10):
         max_prev_node = []
         for i in range(iter):
             if i % (iter / 5) == 0:
                 print('iter {} times'.format(i))
             adj_idx = np.random.randint(len(self.adj_all))
             adj_copy = self.adj_all[adj_idx].copy()
-            # print('Graph size', adj_copy.shape[0])
             x_idx = np.random.permutation(adj_copy.shape[0])
             adj_copy = adj_copy[np.ix_(x_idx, x_idx)]
             adj_copy_matrix = np.asmatrix(adj_copy)
             G = nx.from_numpy_matrix(adj_copy_matrix)
-            # then do bfs in the permuted G
             start_idx = np.random.randint(adj_copy.shape[0])
             x_idx = np.array(bfs_seq(G, start_idx))
             adj_copy = adj_copy[np.ix_(x_idx, x_idx)]
-            # encode adj
             adj_encoded = encode_adj_flexible(adj_copy.copy())
             max_encoded_len = max([len(adj_encoded[i]) for i in range(len(adj_encoded))])
             max_prev_node.append(max_encoded_len)
         max_prev_node = sorted(max_prev_node)[-1*topk:]
         return max_prev_node
-
-
 
 ########## use pytorch dataloader
 class Graph_sequence_sampler_pytorch_nobfs(torch.utils.data.Dataset):
