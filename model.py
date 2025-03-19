@@ -18,10 +18,10 @@ import math
 import numpy as np
 import time
 
+from decoder import GraphRNNDecoder
 
 
-
-def binary_cross_entropy_weight(y_pred, y,has_weight=False, weight_length=1, weight_max=10):
+def binary_cross_entropy_weight(y_pred, y, has_weight=False, weight_length=1, weight_max=10):
     '''
 
     :param y_pred:
@@ -31,26 +31,27 @@ def binary_cross_entropy_weight(y_pred, y,has_weight=False, weight_length=1, wei
     :return:
     '''
     if has_weight:
-        weight = torch.ones(y.size(0),y.size(1),y.size(2))
-        weight_linear = torch.arange(1,weight_length+1)/weight_length*weight_max
-        weight_linear = weight_linear.view(1,weight_length,1).repeat(y.size(0),1,y.size(2))
-        weight[:,-1*weight_length:,:] = weight_linear
+        weight = torch.ones(y.size(0), y.size(1), y.size(2))
+        weight_linear = torch.arange(1, weight_length + 1) / weight_length * weight_max
+        weight_linear = weight_linear.view(1, weight_length, 1).repeat(y.size(0), 1, y.size(2))
+        weight[:, -1 * weight_length:, :] = weight_linear
         loss = F.binary_cross_entropy(y_pred, y, weight=weight.cuda())
     else:
         loss = F.binary_cross_entropy(y_pred, y)
     return loss
 
 
-def sample_tensor(y,sample=True, thresh=0.5):
+def sample_tensor(y, sample=True, thresh=0.5):
     # do sampling
     if sample:
         y_thresh = Variable(torch.rand(y.size())).cuda()
-        y_result = torch.gt(y,y_thresh).float()
+        y_result = torch.gt(y, y_thresh).float()
     # do max likelihood based on some threshold
     else:
-        y_thresh = Variable(torch.ones(y.size())*thresh).cuda()
+        y_thresh = Variable(torch.ones(y.size()) * thresh).cuda()
         y_result = torch.gt(y, y_thresh).float()
     return y_result
+
 
 def gumbel_softmax(logits, temperature, eps=1e-9):
     '''
@@ -70,6 +71,7 @@ def gumbel_softmax(logits, temperature, eps=1e-9):
     x = F.softmax(x)
     return x
 
+
 # for i in range(10):
 #     x = Variable(torch.randn(1,10)).cuda()
 #     y = gumbel_softmax(x, temperature=0.01)
@@ -88,13 +90,14 @@ def gumbel_sigmoid(logits, temperature):
     :return:
     '''
     # get gumbel noise
-    noise = torch.rand(logits.size()) # uniform(0,1)
-    noise_logistic = torch.log(noise)-torch.log(1-noise) # logistic(0,1)
+    noise = torch.rand(logits.size())  # uniform(0,1)
+    noise_logistic = torch.log(noise) - torch.log(1 - noise)  # logistic(0,1)
     noise = Variable(noise_logistic).cuda()
 
     x = (logits + noise) / temperature
     x = F.sigmoid(x)
     return x
+
 
 # x = Variable(torch.randn(100)).cuda()
 # y = gumbel_sigmoid(x,temperature=0.01)
@@ -116,26 +119,27 @@ def sample_sigmoid(y, sample, thresh=0.5, sample_time=2):
     y = F.sigmoid(y)
     # do sampling
     if sample:
-        if sample_time>1:
-            y_result = Variable(torch.rand(y.size(0),y.size(1),y.size(2))).cuda()
+        if sample_time > 1:
+            y_result = Variable(torch.rand(y.size(0), y.size(1), y.size(2))).cuda()
             # loop over all batches
             for i in range(y_result.size(0)):
                 # do 'multi_sample' times sampling
                 for j in range(sample_time):
                     y_thresh = Variable(torch.rand(y.size(1), y.size(2))).cuda()
                     y_result[i] = torch.gt(y[i], y_thresh).float()
-                    if (torch.sum(y_result[i]).data>0).any():
+                    if (torch.sum(y_result[i]).data > 0).any():
                         break
                     # else:
                     #     print('all zero',j)
         else:
-            y_thresh = Variable(torch.rand(y.size(0),y.size(1),y.size(2))).cuda()
-            y_result = torch.gt(y,y_thresh).float()
+            y_thresh = Variable(torch.rand(y.size(0), y.size(1), y.size(2))).cuda()
+            y_result = torch.gt(y, y_thresh).float()
     # do max likelihood based on some threshold
     else:
-        y_thresh = Variable(torch.ones(y.size(0), y.size(1), y.size(2))*thresh).cuda()
+        y_thresh = Variable(torch.ones(y.size(0), y.size(1), y.size(2)) * thresh).cuda()
         y_result = torch.gt(y, y_thresh).float()
     return y_result
+
 
 def sample_sigmoid_attention(y, sample, thresh=0.5, sample_time=2):
     '''
@@ -150,31 +154,31 @@ def sample_sigmoid_attention(y, sample, thresh=0.5, sample_time=2):
         y = y[0]  # Extract the first element if y is a tuple
     # do sigmoid first
     y = F.sigmoid(y)
-    
+
     # Check dimensions and expand if necessary
     if y.dim() == 2:  # If y has only two dimensions
         y = y.unsqueeze(2)  # Expand to 3 dimensions: [batch_size, hidden_size, 1]
 
     # do sampling
     if sample:
-        if sample_time>1:
-            y_result = Variable(torch.rand(y.size(0),y.size(1),y.size(2))).cuda()
+        if sample_time > 1:
+            y_result = Variable(torch.rand(y.size(0), y.size(1), y.size(2))).cuda()
             # loop over all batches
             for i in range(y_result.size(0)):
                 # do 'multi_sample' times sampling
                 for j in range(sample_time):
                     y_thresh = Variable(torch.rand(y.size(1), y.size(2))).cuda()
                     y_result[i] = torch.gt(y[i], y_thresh).float()
-                    if (torch.sum(y_result[i]).data>0).any():
+                    if (torch.sum(y_result[i]).data > 0).any():
                         break
                     # else:
                     #     print('all zero',j)
         else:
-            y_thresh = Variable(torch.rand(y.size(0),y.size(1),y.size(2))).cuda()
-            y_result = torch.gt(y,y_thresh).float()
+            y_thresh = Variable(torch.rand(y.size(0), y.size(1), y.size(2))).cuda()
+            y_result = torch.gt(y, y_thresh).float()
     # do max likelihood based on some threshold
     else:
-        y_thresh = Variable(torch.ones(y.size(0), y.size(1), y.size(2))*thresh).cuda()
+        y_thresh = Variable(torch.ones(y.size(0), y.size(1), y.size(2)) * thresh).cuda()
         y_result = torch.gt(y, y_thresh).float()
     return y_result
 
@@ -197,15 +201,15 @@ def sample_sigmoid_supervised(y_pred, y, current, y_len, sample_time=2):
     # loop over all batches
     for i in range(y_result.size(0)):
         # using supervision
-        if current<y_len[i]:
+        if current < y_len[i]:
             while True:
                 y_thresh = Variable(torch.rand(y_pred.size(1), y_pred.size(2))).cuda()
                 y_result[i] = torch.gt(y_pred[i], y_thresh).float()
                 # print('current',current)
                 # print('y_result',y_result[i].data)
                 # print('y',y[i])
-                y_diff = y_result[i].data-y[i]
-                if (y_diff>=0).all():
+                y_diff = y_result[i].data - y[i]
+                if (y_diff >= 0).all():
                     break
         # supervision done
         else:
@@ -213,9 +217,10 @@ def sample_sigmoid_supervised(y_pred, y, current, y_len, sample_time=2):
             for j in range(sample_time):
                 y_thresh = Variable(torch.rand(y_pred.size(1), y_pred.size(2))).cuda()
                 y_result[i] = torch.gt(y_pred[i], y_thresh).float()
-                if (torch.sum(y_result[i]).data>0).any():
+                if (torch.sum(y_result[i]).data > 0).any():
                     break
     return y_result
+
 
 def sample_sigmoid_supervised_simple(y_pred, y, current, y_len, sample_time=2):
     '''
@@ -235,7 +240,7 @@ def sample_sigmoid_supervised_simple(y_pred, y, current, y_len, sample_time=2):
     # loop over all batches
     for i in range(y_result.size(0)):
         # using supervision
-        if current<y_len[i]:
+        if current < y_len[i]:
             y_result[i] = y[i]
         # supervision done
         else:
@@ -243,9 +248,10 @@ def sample_sigmoid_supervised_simple(y_pred, y, current, y_len, sample_time=2):
             for j in range(sample_time):
                 y_thresh = Variable(torch.rand(y_pred.size(1), y_pred.size(2))).cuda()
                 y_result[i] = torch.gt(y_pred[i], y_thresh).float()
-                if (torch.sum(y_result[i]).data>0).any():
+                if (torch.sum(y_result[i]).data > 0).any():
                     break
     return y_result
+
 
 ################### current adopted model, LSTM+MLP || LSTM+VAE || LSTM+LSTM (where LSTM can be GRU as well)
 #####
@@ -255,9 +261,100 @@ def sample_sigmoid_supervised_simple(y_pred, y, current, y_len, sample_time=2):
 # n: noise for generator
 # l: whether an output is real or not, binary
 
+# class GRU_plain_with_attention(nn.Module):
+#     def __init__(self, input_size, embedding_size, hidden_size, num_layers,
+#                  has_input=True, has_output=False, output_size=None):
+#         super(GRU_plain_with_attention, self).__init__()
+#         self.num_layers = num_layers
+#         self.hidden_size = hidden_size
+#         self.has_input = has_input
+#         self.has_output = has_output
+
+#         if has_input:
+#             self.input = nn.Linear(input_size, embedding_size)
+#             self.rnn = nn.GRU(input_size=embedding_size, hidden_size=hidden_size,
+#                               num_layers=num_layers, batch_first=True)
+#         else:
+#             self.rnn = nn.GRU(input_size=input_size, hidden_size=hidden_size,
+#                               num_layers=num_layers, batch_first=True)
+#         if has_output:
+#             self.output = nn.Sequential(
+#                 nn.Linear(128, embedding_size),  # Input size (128) matches context vector
+#                 nn.ReLU(),
+#                 nn.Linear(embedding_size, output_size)  # Output size is user-defined
+#             )
+
+
+#         self.attention = nn.Linear(hidden_size, 1)  # For computing attention scores
+#         self.relu = nn.ReLU()
+#         self.softmax = nn.Softmax(dim=1)
+
+#         # initialize
+#         self.hidden = None  # need initialize before forward run
+
+#         for name, param in self.rnn.named_parameters():
+#             if 'bias' in name:
+#                 nn.init.constant_(param, 0.25)
+#             elif 'weight' in name:
+#                 nn.init.xavier_uniform_(param, gain=nn.init.calculate_gain('sigmoid'))
+#         for m in self.modules():
+#             if isinstance(m, nn.Linear):
+#                 nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+
+#     def init_hidden(self, batch_size):
+#         return Variable(torch.zeros(self.num_layers, batch_size, self.hidden_size)).cuda()
+
+#     def forward(self, input_raw, pack=False, input_len=None):
+#         if self.has_input:
+#             if isinstance(input_raw, PackedSequence):
+#                 input_raw, _ = pad_packed_sequence(input_raw, batch_first=True)
+#             print("Input to self.input:", input_raw.shape)
+
+#             # Ensure input is reshaped correctly before passing to the self.input layer
+#             if input_raw.dim() == 2:  # If it's a 2D tensor (batch_size, input_size)
+#                 input_raw = input_raw.unsqueeze(1)  # Add sequence length dimension (batch_size, seq_len=1, input_size)
+#             elif input_raw.dim() == 3:  # If it's a 3D tensor (batch_size, seq_len, input_size)
+#                pass  # Already in the correct shape
+
+#             input = self.input(input_raw)
+#             input = self.relu(input)
+#         else:
+#             input = input_raw
+#         if pack:
+#             input = pack_padded_sequence(input, input_len, batch_first=True)
+#         output_raw, self.hidden = self.rnn(input, self.hidden)
+#         if pack:
+#             output_raw, _ = pad_packed_sequence(output_raw, batch_first=True)
+
+#         # Attention mechanism
+#         attention_scores = self.attention(output_raw)  # Shape: (batch_size, seq_len, 1)
+#         print("Attention scores shape:", attention_scores.shape)
+#         attention_weights = self.softmax(attention_scores)  # Shape: (batch_size, seq_len, 1)
+#         print("Attention weights shape:", attention_weights.shape)
+#         context_vector = torch.sum(attention_weights * output_raw, dim=1)  # Shape: (batch_size, hidden_size)
+#         print("Context vector shape:", context_vector.shape)
+#         print("Expected input size for output layer:", self.output[0].in_features)
+
+#         print("Context vector shape before output layer:", context_vector.shape)
+
+#         if context_vector.dim() == 1:
+#             context_vector = context_vector.unsqueeze(0)  # Add batch dimension if missing
+
+#         if context_vector.size(1) != 128:
+#             raise ValueError(f"Expected context vector with size [batch_size, 128], but got {context_vector.shape}")
+
+#         if self.has_output:
+#             print("Input to output layer:", context_vector.shape)  # Debug context vector shape
+#             output_raw = self.output(context_vector)
+#         else:
+#             output_raw = context_vector
+
+#         return output_raw, attention_weights  # Returning attention weights for interpretability
+
 # plain LSTM model
 class LSTM_plain(nn.Module):
-    def __init__(self, input_size, embedding_size, hidden_size, num_layers, has_input=True, has_output=False, output_size=None):
+    def __init__(self, input_size, embedding_size, hidden_size, num_layers, has_input=True, has_output=False,
+                 output_size=None):
         super(LSTM_plain, self).__init__()
         self.num_layers = num_layers
         self.hidden_size = hidden_size
@@ -266,7 +363,8 @@ class LSTM_plain(nn.Module):
 
         if has_input:
             self.input = nn.Linear(input_size, embedding_size)
-            self.rnn = nn.LSTM(input_size=embedding_size, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
+            self.rnn = nn.LSTM(input_size=embedding_size, hidden_size=hidden_size, num_layers=num_layers,
+                               batch_first=True)
         else:
             self.rnn = nn.LSTM(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
         if has_output:
@@ -278,13 +376,13 @@ class LSTM_plain(nn.Module):
 
         self.relu = nn.ReLU()
         # initialize
-        self.hidden = None # need initialize before forward run
+        self.hidden = None  # need initialize before forward run
 
         for name, param in self.rnn.named_parameters():
             if 'bias' in name:
                 nn.init.constant(param, 0.25)
             elif 'weight' in name:
-                nn.init.xavier_uniform(param,gain=nn.init.calculate_gain('sigmoid'))
+                nn.init.xavier_uniform(param, gain=nn.init.calculate_gain('sigmoid'))
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 m.weight.data = init.xavier_uniform(m.weight.data, gain=nn.init.calculate_gain('relu'))
@@ -309,9 +407,11 @@ class LSTM_plain(nn.Module):
         # return hidden state at each time step
         return output_raw
 
+
 # plain GRU model
 class GRU_plain(nn.Module):
-    def __init__(self, input_size, embedding_size, hidden_size, num_layers, has_input=True, has_output=False, output_size=None):
+    def __init__(self, input_size, embedding_size, hidden_size, num_layers, has_input=True, has_output=False,
+                 output_size=None):
         super(GRU_plain, self).__init__()
         self.num_layers = num_layers
         self.hidden_size = hidden_size
@@ -339,7 +439,7 @@ class GRU_plain(nn.Module):
             if 'bias' in name:
                 nn.init.constant(param, 0.25)
             elif 'weight' in name:
-                nn.init.xavier_uniform(param,gain=nn.init.calculate_gain('sigmoid'))
+                nn.init.xavier_uniform(param, gain=nn.init.calculate_gain('sigmoid'))
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 m.weight.data = init.xavier_uniform(m.weight.data, gain=nn.init.calculate_gain('relu'))
@@ -349,9 +449,15 @@ class GRU_plain(nn.Module):
 
     def forward(self, input_raw, pack=False, input_len=None):
         if self.has_input:
+            print("Shape of input_raw:", input_raw.shape)  # Should be (batch_size, *, 80)
+            print("Expected weight shape:", self.input.weight.shape)  # Should be (80, 64)
+
             input = self.input(input_raw)
             input = self.relu(input)
         else:
+            print("Shape of input_raw:", input_raw.shape)  # Should be (batch_size, *, 80)
+            print("Expected weight shape:", self.input.weight.shape)  # Should be (80, 64)
+
             input = input_raw
         if pack:
             input = pack_padded_sequence(input, input_len, batch_first=True)
@@ -363,10 +469,112 @@ class GRU_plain(nn.Module):
         # return hidden state at each time step
         return output_raw
 
+# -------------------------------------------------
+class GRU_plain_dec(nn.Module):
+    def __init__(self, input_size, embedding_size, hidden_size, num_layers, output_size, has_input=True,
+                 has_output=True):
+        super(GRU_plain_dec, self).__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.has_input = has_input
+        self.has_output = has_output
+
+        # Input layer to project input_size to embedding_size
+        if has_input:
+            self.input = nn.Linear(input_size, embedding_size)
+        else:
+            self.input = None
+
+        # GRU layer for processing sequences
+        self.rnn = nn.GRU(input_size=embedding_size, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
+
+        # Output layer to project hidden states to output_size
+        if has_output:
+            self.output = nn.Sequential(
+                nn.Linear(hidden_size, embedding_size),
+                nn.ReLU(),
+                nn.Linear(embedding_size, output_size)
+            )
+        else:
+            self.output = None
+
+        # Activation function
+        self.relu = nn.ReLU()
+
+        # Initialize hidden state
+        self.hidden = None
+
+        # Parameter initialization
+        for name, param in self.rnn.named_parameters():
+            if 'bias' in name:
+                nn.init.constant_(param, 0.25)
+            elif 'weight' in name:
+                nn.init.xavier_uniform_(param, gain=nn.init.calculate_gain('sigmoid'))
+
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+
+    # def init_hidden(self, batch_size, device):
+    #     # Initialize hidden state with zeros
+    #     return torch.zeros(self.num_layers, batch_size, self.hidden_size).to(device)
+    def init_hidden(self, batch_size, device):
+        return torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+
+    def forward(self, input_raw, graph_embedding, pack=False, input_len=None):
+        # Prepare input
+        if self.has_input:
+            input = self.input(input_raw)
+            input = self.relu(input)
+        else:
+            input = input_raw
+
+        # Expand graph embedding to match sequence length
+        batch_size, seq_len, _ = input.shape
+        # print("Shape of graph_embedding before unsqueeze:", graph_embedding.shape)
+        if graph_embedding.dim() == 2:  # Ensure it has the correct number of dimensions
+            graph_embedding = graph_embedding.unsqueeze(1).expand(-1, seq_len, -1)
+
+        # Concatenate graph embedding with input
+        graph_embedding = graph_embedding.expand(input.size(0), -1, -1)
+        # print("Shape of input:", input.shape)  # Expected: [batch_size, seq_len, feature_size]
+        # print("Shape of graph_embedding:", graph_embedding.shape)  # Expected: [batch_size, 1, hidden_size]
+        # input = torch.cat([input, graph_embedding], dim=-1)
+        # projection = nn.Linear(192, 64).to(input.device)
+        input = graph_embedding
+        # Create projection layer dynamically based on input size
+        input_size = input.shape[-1]  # Get the last dimension of input dynamically
+        output_size = min(64, input_size // 2)  # Example: half the input size but not more than 64
+        projection = nn.Linear(input_size, output_size).to(input.device)
+        # projection = nn.Linear(128, 64).to(input.device)
+        input = projection(input)
+
+        # input = torch.cat([input, graph_embedding], dim=-1)
+
+        # Pack sequences if necessary
+        if pack:
+            input = pack_padded_sequence(input, input_len, batch_first=True)
+
+        # Forward pass through GRU
+        output_raw, self.hidden = self.rnn(input, self.hidden)
+
+        # Unpack sequences if necessary
+        if pack:
+            output_raw = pad_packed_sequence(output_raw, batch_first=True)[0]
+
+        # Forward pass through output layer
+        if self.has_output:
+            output_raw = self.output(output_raw)
+
+        return output_raw
+
+
 class Attention(nn.Module):
     def __init__(self, hidden_size):
         super(Attention, self).__init__()
         self.attention_weights = nn.Linear(hidden_size, 1)
+        # Define the projection layer to match the expected hidden size (128)
+        self.projection_layer = nn.Linear(128, 128)  # Transform 16 -> 128
 
     def forward(self, rnn_output):
         """
@@ -378,23 +586,38 @@ class Attention(nn.Module):
             rnn_output, _ = pad_packed_sequence(rnn_output, batch_first=True)
 
         # Compute attention scores
-        scores = self.attention_weights(rnn_output)
-        scores = scores.squeeze(-1) 
+        scores = self.attention_weights(rnn_output)  # Shape: [batch_size, seq_len, 1]
+        scores = scores.squeeze(-1)  # Shape: [batch_size, seq_len]
 
         # Normalize attention scores using softmax
-        attention_weights = F.softmax(scores, dim=1)
+        attention_weights = F.softmax(scores, dim=1)  # Shape: [batch_size, seq_len]
 
         # Compute the context vector by performing a weighted sum of the RNN outputs
-        context_vector = torch.sum(attention_weights.unsqueeze(2) * rnn_output, dim=1)
+        context_vector = torch.sum(attention_weights.unsqueeze(2) * rnn_output,
+                                   dim=1)  # Shape: [batch_size, hidden_size]
 
         return context_vector, scores
 
+
+# Example usage
+if __name__ == "__main__":
+    batch_size = 4
+    encoder_output = torch.randn(batch_size, 128)  # Fake encoder output
+
+    decoder = GraphRNNDecoder(input_dim=128, hidden_dim=64, output_dim=1)
+    nodes, edges = decoder(encoder_output, max_nodes=5)
+
+    print("Generated Nodes Shape:", nodes.shape)
+    print("Generated Edges Shape:", edges.shape)
+
+
 class GRU_plain_with_attention(nn.Module):
-    def __init__(self, input_size, embedding_size, hidden_size, num_layers, has_input=True, has_output=False, output_size=None):
+    def __init__(self, input_size, embedding_size, hidden_size, num_layers, has_input=True, has_output=False,
+                 output_size=None):
         super(GRU_plain_with_attention, self).__init__()
         self.num_layers = num_layers
         self.hidden_size = hidden_size
-        #self.batch_size = 32
+        # self.batch_size = 32
         self.has_input = has_input
         self.has_output = has_output
 
@@ -410,7 +633,7 @@ class GRU_plain_with_attention(nn.Module):
                 nn.ReLU(),
                 nn.Linear(embedding_size, output_size)
             )
-            
+
         # Add attention
         self.attention = Attention(hidden_size)
         # Add Layer Normalization
@@ -423,7 +646,7 @@ class GRU_plain_with_attention(nn.Module):
             if 'bias' in name:
                 nn.init.constant_(param, 0.25)
             elif 'weight' in name:
-                nn.init.xavier_uniform_(param,gain=nn.init.calculate_gain('sigmoid'))
+                nn.init.xavier_uniform_(param, gain=nn.init.calculate_gain('sigmoid'))
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 m.weight.data = init.xavier_uniform_(m.weight.data, gain=nn.init.calculate_gain('relu'))
@@ -433,117 +656,62 @@ class GRU_plain_with_attention(nn.Module):
 
     def forward(self, input_raw, pack=False, input_len=None):
         if self.has_input:
+            print("Shape of input_raw:", input_raw.shape)  # Should be (batch_size, *, 80)
+            print("Expected weight shape:", self.input.weight.shape)  # Should be (80, 64)
             input = self.input(input_raw)
             input = self.relu(input)
         else:
+            print("Shape of input_raw:", input_raw.shape)  # Should be (batch_size, *, 80)
+            print("Expected weight shape:", self.input.weight.shape)  # Should be (80, 64)
             input = input_raw
         self.hidden = self.init_hidden(batch_size=32)
-        
+
         if pack:
             input = pack_padded_sequence(input, input_len, batch_first=True)
-        #print(f"Shape of self.hidden before RNN: {self.hidden.size()}")
+        # batch_size, seq_len, hidden_size = output_raw.size()  # Get the correct batch size from output_raw
+        # print(f"Shape of self.hidden before RNN: {self.hidden.size()}")
 
         output_raw, self.hidden = self.rnn(input, self.hidden)
-        #print(f"Shape of self.hidden after RNN: {self.hidden.size()}")
+        # print(f"Shape of self.hidden after RNN: {self.hidden.size()}")
         if pack:
-        # Unpack the sequence if it was packed
+            # Unpack the sequence if it was packed
             output_raw, lengths = pad_packed_sequence(output_raw, batch_first=True)
-       
 
         # Now apply attention on the unpacked sequence (output_raw is now a tensor, not PackedSequence)
-        context_vector, attention_scores = self.attention(output_raw) 
-    
+        context_vector, attention_scores = self.attention(output_raw)  # context_vector: (batch_size, hidden_size)
+
         # Apply Layer Normalization
         output_raw = self.layer_norm(output_raw)
-        #print(output_raw.shape)  # Check the shape of rnn_output
+        # print(output_raw.shape)  # Check the shape of rnn_output
 
+        # # Apply attention
+        # context_vector, attention_scores = self.attention(output_raw)  # context_vector: (batch_size, hidden_size)
 
         if self.has_output:
             context_vector = self.output(context_vector)  # (batch_size, output_size)
-        #print(f"Shape of self.hidden after RNN: {self.hidden.size()}")
+        # print(f"Shape of self.hidden after RNN: {self.hidden.size()}")
 
         return context_vector, attention_scores
 
+    # Unpack the sequence if it's packed
+    # output_raw, lengths = pad_packed_sequence(output_raw, batch_first=True)
+    # print(output_raw.shape)  # Check the shape of rnn_output
+    # Apply attention
+    # context_vector, attention_scores = self.attention(output_raw)  # context_vector: (batch_size, hidden_size)
+    # if pack:
+    #     output_raw = pad_packed_sequence(output_raw, batch_first=True)[0]
 
-# a deterministic linear output
-class MLP_plain(nn.Module):
-    def __init__(self, h_size, embedding_size, y_size):
-        super(MLP_plain, self).__init__()
-        self.deterministic_output = nn.Sequential(
-            nn.Linear(h_size, embedding_size),
-            nn.ReLU(),
-            nn.Linear(embedding_size, y_size)
-        )
+    # print(output_raw.shape)  # Check the shape of rnn_output
 
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                m.weight.data = init.xavier_uniform(m.weight.data, gain=nn.init.calculate_gain('relu'))
+    # Extract batch_size and seq_len dynamically from output_raw shape
+    # batch_size, seq_len, hidden_size = output_raw.size()
 
-    def forward(self, h):
-        y = self.deterministic_output(h)
-        return y
-
-# a deterministic linear output, additional output indicates if the sequence should continue grow
-class MLP_token_plain(nn.Module):
-    def __init__(self, h_size, embedding_size, y_size):
-        super(MLP_token_plain, self).__init__()
-        self.deterministic_output = nn.Sequential(
-            nn.Linear(h_size, embedding_size),
-            nn.ReLU(),
-            nn.Linear(embedding_size, y_size)
-        )
-        self.token_output = nn.Sequential(
-            nn.Linear(h_size, embedding_size),
-            nn.ReLU(),
-            nn.Linear(embedding_size, 1)
-        )
-
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                m.weight.data = init.xavier_uniform(m.weight.data, gain=nn.init.calculate_gain('relu'))
-
-    def forward(self, h):
-        y = self.deterministic_output(h)
-        t = self.token_output(h)
-        return y,t
-
-# a deterministic linear output (update: add noise)
-class MLP_VAE_plain(nn.Module):
-    def __init__(self, h_size, embedding_size, y_size):
-        super(MLP_VAE_plain, self).__init__()
-        self.encode_11 = nn.Linear(h_size, embedding_size) # mu
-        self.encode_12 = nn.Linear(h_size, embedding_size) # lsgms
-
-        self.decode_1 = nn.Linear(embedding_size, embedding_size)
-        self.decode_2 = nn.Linear(embedding_size, y_size) # make edge prediction (reconstruct)
-        self.relu = nn.ReLU()
-
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                m.weight.data = init.xavier_uniform(m.weight.data, gain=nn.init.calculate_gain('relu'))
-
-    def forward(self, h):
-        # encoder
-        z_mu = self.encode_11(h)
-        z_lsgms = self.encode_12(h)
-        # reparameterize
-        z_sgm = z_lsgms.mul(0.5).exp_()
-        eps = Variable(torch.randn(z_sgm.size())).cuda()
-        z = eps*z_sgm + z_mu
-        # decoder
-        y = self.decode_1(z)
-        y = self.relu(y)
-        y = self.decode_2(y)
-        return y, z_mu, z_lsgms
-
-# a deterministic linear output (update: add noise)
-class MLP_VAE_conditional_plain(nn.Module):
     def __init__(self, h_size, embedding_size, y_size):
         super(MLP_VAE_conditional_plain, self).__init__()
         self.encode_11 = nn.Linear(h_size, embedding_size)  # mu
         self.encode_12 = nn.Linear(h_size, embedding_size)  # lsgms
 
-        self.decode_1 = nn.Linear(embedding_size+h_size, embedding_size)
+        self.decode_1 = nn.Linear(embedding_size + h_size, embedding_size)
         self.decode_2 = nn.Linear(embedding_size, y_size)  # make edge prediction (reconstruct)
         self.relu = nn.ReLU()
 
@@ -560,48 +728,46 @@ class MLP_VAE_conditional_plain(nn.Module):
         eps = Variable(torch.randn(z_sgm.size(0), z_sgm.size(1), z_sgm.size(2))).cuda()
         z = eps * z_sgm + z_mu
         # decoder
-        y = self.decode_1(torch.cat((h,z),dim=2))
+        y = self.decode_1(torch.cat((h, z), dim=2))
         y = self.relu(y)
         y = self.decode_2(y)
         return y, z_mu, z_lsgms
 
 
-
-
 ########### baseline model 1: Learning deep generative model of graphs
 
 class DGM_graphs(nn.Module):
-    def __init__(self,h_size):
+    def __init__(self, h_size):
         # h_size: node embedding size
         # h_size*2: graph embedding size
 
         super(DGM_graphs, self).__init__()
         ### all modules used by the model
         ## 1 message passing, 2 times
-        self.m_uv_1 = nn.Linear(h_size*2, h_size*2)
-        self.f_n_1 = nn.GRUCell(h_size*2, h_size) # input_size, hidden_size
+        self.m_uv_1 = nn.Linear(h_size * 2, h_size * 2)
+        self.f_n_1 = nn.GRUCell(h_size * 2, h_size)  # input_size, hidden_size
 
         self.m_uv_2 = nn.Linear(h_size * 2, h_size * 2)
         self.f_n_2 = nn.GRUCell(h_size * 2, h_size)  # input_size, hidden_size
 
         ## 2 graph embedding and new node embedding
         # for graph embedding
-        self.f_m = nn.Linear(h_size, h_size*2)
+        self.f_m = nn.Linear(h_size, h_size * 2)
         self.f_gate = nn.Sequential(
-            nn.Linear(h_size,1),
+            nn.Linear(h_size, 1),
             nn.Sigmoid()
         )
         # for new node embedding
-        self.f_m_init = nn.Linear(h_size, h_size*2)
+        self.f_m_init = nn.Linear(h_size, h_size * 2)
         self.f_gate_init = nn.Sequential(
-            nn.Linear(h_size,1),
+            nn.Linear(h_size, 1),
             nn.Sigmoid()
         )
-        self.f_init = nn.Linear(h_size*2, h_size)
+        self.f_init = nn.Linear(h_size * 2, h_size)
 
         ## 3 f_addnode
         self.f_an = nn.Sequential(
-            nn.Linear(h_size*2,1),
+            nn.Linear(h_size * 2, 1),
             nn.Sigmoid()
         )
 
@@ -612,9 +778,7 @@ class DGM_graphs(nn.Module):
         )
 
         ## 5 f_nodes
-        self.f_s = nn.Linear(h_size*2, 1)
-
-
+        self.f_s = nn.Linear(h_size * 2, 1)
 
 
 def message_passing(node_neighbor, node_embedding, model):
@@ -627,7 +791,7 @@ def message_passing(node_neighbor, node_embedding, model):
             message = torch.sum(model.m_uv_1(torch.cat((node_self, node_self_neighbor), dim=1)), dim=0, keepdim=True)
             node_embedding_new.append(model.f_n_1(message, node_embedding[i]))
         else:
-            message_null = Variable(torch.zeros((node_embedding[i].size(0),node_embedding[i].size(1)*2))).cuda()
+            message_null = Variable(torch.zeros((node_embedding[i].size(0), node_embedding[i].size(1) * 2))).cuda()
             node_embedding_new.append(model.f_n_1(message_null, node_embedding[i]))
     node_embedding = node_embedding_new
     node_embedding_new = []
@@ -644,9 +808,7 @@ def message_passing(node_neighbor, node_embedding, model):
     return node_embedding_new
 
 
-
 def calc_graph_embedding(node_embedding_cat, model):
-
     node_embedding_graph = model.f_m(node_embedding_cat)
     node_embedding_graph_gate = model.f_gate(node_embedding_cat)
     graph_embedding = torch.sum(torch.mul(node_embedding_graph, node_embedding_graph_gate), dim=0, keepdim=True)
@@ -661,31 +823,6 @@ def calc_init_embedding(node_embedding_cat, model):
     return init_embedding
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 ################################################## code that are NOT used for final version #############
 
 
@@ -697,8 +834,8 @@ class Graph_RNN_structure(nn.Module):
         self.hidden_size = hidden_size
         self.batch_size = batch_size
         self.output_size = output_size
-        self.num_layers = num_layers # num_layers of cnn_output
-        self.is_bn=is_bn
+        self.num_layers = num_layers  # num_layers of cnn_output
+        self.is_bn = is_bn
 
         ## model
         self.relu = nn.ReLU()
@@ -716,12 +853,15 @@ class Graph_RNN_structure(nn.Module):
         # )
 
         if is_dilation:
-            self.conv_block = nn.ModuleList([nn.Conv1d(hidden_size, hidden_size, kernel_size=3, dilation=2**i, padding=2**i) for i in range(num_layers-1)])
+            self.conv_block = nn.ModuleList(
+                [nn.Conv1d(hidden_size, hidden_size, kernel_size=3, dilation=2 ** i, padding=2 ** i) for i in
+                 range(num_layers - 1)])
         else:
-            self.conv_block = nn.ModuleList([nn.Conv1d(hidden_size, hidden_size, kernel_size=3, dilation=1, padding=1) for i in range(num_layers-1)])
-        self.bn_block = nn.ModuleList([nn.BatchNorm1d(hidden_size) for i in range(num_layers-1)])
+            self.conv_block = nn.ModuleList(
+                [nn.Conv1d(hidden_size, hidden_size, kernel_size=3, dilation=1, padding=1) for i in
+                 range(num_layers - 1)])
+        self.bn_block = nn.ModuleList([nn.BatchNorm1d(hidden_size) for i in range(num_layers - 1)])
         self.conv_out = nn.Conv1d(hidden_size, 1, kernel_size=3, dilation=1, padding=1)
-
 
         # # use CNN to do state transition
         # self.cnn_transition = nn.Sequential(
@@ -733,10 +873,9 @@ class Graph_RNN_structure(nn.Module):
 
         # use linear to do transition, same as GCN mean aggregator
         self.linear_transition = nn.Sequential(
-            nn.Linear(hidden_size,hidden_size),
+            nn.Linear(hidden_size, hidden_size),
             nn.ReLU()
         )
-
 
         # GRU based output, output a single edge prediction at a time
         # self.gru_output = nn.GRU(input_size=1, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
@@ -762,13 +901,13 @@ class Graph_RNN_structure(nn.Module):
             if isinstance(m, nn.GRU):
                 # print('gru')
                 m.weight_ih_l0.data = init.xavier_uniform(m.weight_ih_l0.data,
-                                                                  gain=nn.init.calculate_gain('sigmoid'))
+                                                          gain=nn.init.calculate_gain('sigmoid'))
                 m.weight_hh_l0.data = init.xavier_uniform(m.weight_hh_l0.data,
-                                                                  gain=nn.init.calculate_gain('sigmoid'))
+                                                          gain=nn.init.calculate_gain('sigmoid'))
                 m.bias_ih_l0.data = torch.ones(m.bias_ih_l0.data.size(0)) * 0.25
                 m.bias_hh_l0.data = torch.ones(m.bias_hh_l0.data.size(0)) * 0.25
 
-    def init_hidden(self,len=None):
+    def init_hidden(self, len=None):
         if len is None:
             return Variable(torch.ones(self.batch_size, self.hidden_size, 1)).cuda()
         else:
@@ -778,7 +917,7 @@ class Graph_RNN_structure(nn.Module):
             return hidden_list
 
     # only run a single forward step
-    def forward(self, x, teacher_forcing, temperature = 0.5, bptt=True,bptt_len=20, flexible=True,max_prev_node=100):
+    def forward(self, x, teacher_forcing, temperature=0.5, bptt=True, bptt_len=20, flexible=True, max_prev_node=100):
         # x: batch*1*self.output_size, the groud truth
         # todo: current only look back to self.output_size nodes, try to look back according to bfs sequence
 
@@ -795,7 +934,7 @@ class Graph_RNN_structure(nn.Module):
 
         # print('hidden_all_cat',hidden_all_cat.size())
         # att_weight size: batch*1*current_num_nodes
-        for i in range(self.num_layers-1):
+        for i in range(self.num_layers - 1):
             hidden_all_cat = self.conv_block[i](hidden_all_cat)
             if self.is_bn:
                 hidden_all_cat = self.bn_block[i](hidden_all_cat)
@@ -825,23 +964,23 @@ class Graph_RNN_structure(nn.Module):
         #         y_pred_long[:, i, :] = x_step
         #     pass
 
-
         # 3 then update self.hidden_all list
         # i.e., model will use ground truth to update new node
         # x_pred_sample = gumbel_sigmoid(x_pred, temperature=temperature)
-        x_pred_sample = sample_tensor(F.sigmoid(x_pred),sample=True)
+        x_pred_sample = sample_tensor(F.sigmoid(x_pred), sample=True)
         thresh = 0.5
-        x_thresh = Variable(torch.ones(x_pred_sample.size(0), x_pred_sample.size(1), x_pred_sample.size(2)) * thresh).cuda()
+        x_thresh = Variable(
+            torch.ones(x_pred_sample.size(0), x_pred_sample.size(1), x_pred_sample.size(2)) * thresh).cuda()
         x_pred_sample_long = torch.gt(x_pred_sample, x_thresh).long()
         if teacher_forcing:
             # first mask previous hidden states
-            hidden_all_cat_select = hidden_all_cat*x
+            hidden_all_cat_select = hidden_all_cat * x
             x_sum = torch.sum(x, dim=2, keepdim=True).float()
 
         # i.e., the model will use it's own prediction to attend
         else:
             # first mask previous hidden states
-            hidden_all_cat_select = hidden_all_cat*x_pred_sample
+            hidden_all_cat_select = hidden_all_cat * x_pred_sample
             x_sum = torch.sum(x_pred_sample_long, dim=2, keepdim=True).float()
 
         # update hidden vector for new nodes
@@ -858,7 +997,7 @@ class Graph_RNN_structure(nn.Module):
             # use prediction to maintaing history state
             else:
                 x_id = torch.min(torch.nonzero(torch.squeeze(x_pred_sample_long.data)))
-                start = max(len(self.hidden_all)-max_prev_node+1, x_id)
+                start = max(len(self.hidden_all) - max_prev_node + 1, x_id)
                 self.hidden_all = self.hidden_all[start:]
 
         # maintaing a fixed size history state
@@ -874,6 +1013,7 @@ class Graph_RNN_structure(nn.Module):
         # print('x_pred_sample_mean', torch.mean(x_pred_sample))
         return x_pred, x_pred_sample
 
+
 # batch_size = 8
 # output_size = 4
 # generator = Graph_RNN_structure(hidden_size=16, batch_size=batch_size, output_size=output_size, num_layers=1).cuda()
@@ -885,11 +1025,9 @@ class Graph_RNN_structure(nn.Module):
 # print(x_pred)
 
 
-
-
 # current baseline model, generating a graph by lstm
 class Graph_generator_LSTM(nn.Module):
-    def __init__(self,feature_size, input_size, hidden_size, output_size, batch_size, num_layers):
+    def __init__(self, feature_size, input_size, hidden_size, output_size, batch_size, num_layers):
         super(Graph_generator_LSTM, self).__init__()
         self.batch_size = batch_size
         self.num_layers = num_layers
@@ -902,18 +1040,21 @@ class Graph_generator_LSTM(nn.Module):
         # self.hidden,self.cell = self.init_hidden()
         self.hidden = self.init_hidden()
 
-        self.lstm.weight_ih_l0.data = init.xavier_uniform(self.lstm.weight_ih_l0.data, gain=nn.init.calculate_gain('sigmoid'))
-        self.lstm.weight_hh_l0.data = init.xavier_uniform(self.lstm.weight_hh_l0.data, gain=nn.init.calculate_gain('sigmoid'))
-        self.lstm.bias_ih_l0.data = torch.ones(self.lstm.bias_ih_l0.data.size(0))*0.25
-        self.lstm.bias_hh_l0.data = torch.ones(self.lstm.bias_hh_l0.data.size(0))*0.25
+        self.lstm.weight_ih_l0.data = init.xavier_uniform(self.lstm.weight_ih_l0.data,
+                                                          gain=nn.init.calculate_gain('sigmoid'))
+        self.lstm.weight_hh_l0.data = init.xavier_uniform(self.lstm.weight_hh_l0.data,
+                                                          gain=nn.init.calculate_gain('sigmoid'))
+        self.lstm.bias_ih_l0.data = torch.ones(self.lstm.bias_ih_l0.data.size(0)) * 0.25
+        self.lstm.bias_hh_l0.data = torch.ones(self.lstm.bias_hh_l0.data.size(0)) * 0.25
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                m.weight.data = init.xavier_uniform(m.weight.data,gain=nn.init.calculate_gain('relu'))
+                m.weight.data = init.xavier_uniform(m.weight.data, gain=nn.init.calculate_gain('relu'))
+
     def init_hidden(self):
-        return (Variable(torch.zeros(self.num_layers,self.batch_size, self.hidden_size)).cuda(), Variable(torch.zeros(self.num_layers,self.batch_size, self.hidden_size)).cuda())
+        return (Variable(torch.zeros(self.num_layers, self.batch_size, self.hidden_size)).cuda(),
+                Variable(torch.zeros(self.num_layers, self.batch_size, self.hidden_size)).cuda())
 
-
-    def forward(self, input_raw, pack=False,len=None):
+    def forward(self, input_raw, pack=False, len=None):
         input = self.linear_input(input_raw)
         input = self.relu(input)
         if pack:
@@ -925,26 +1066,24 @@ class Graph_generator_LSTM(nn.Module):
         return output
 
 
-
-
-
-
 # a simple MLP generator output
 class Graph_generator_LSTM_output_generator(nn.Module):
-    def __init__(self,h_size, n_size, y_size):
+    def __init__(self, h_size, n_size, y_size):
         super(Graph_generator_LSTM_output_generator, self).__init__()
         # one layer MLP
         self.generator_output = nn.Sequential(
-            nn.Linear(h_size+n_size, 64),
+            nn.Linear(h_size + n_size, 64),
             nn.ReLU(),
             nn.Linear(64, y_size),
             nn.Sigmoid()
         )
-    def forward(self,h,n,temperature):
-        y_cat = torch.cat((h,n), dim=2)
+
+    def forward(self, h, n, temperature):
+        y_cat = torch.cat((h, n), dim=2)
         y = self.generator_output(y_cat)
         # y = gumbel_sigmoid(y,temperature=temperature)
         return y
+
 
 # a simple MLP discriminator
 class Graph_generator_LSTM_output_discriminator(nn.Module):
@@ -952,16 +1091,16 @@ class Graph_generator_LSTM_output_discriminator(nn.Module):
         super(Graph_generator_LSTM_output_discriminator, self).__init__()
         # one layer MLP
         self.discriminator_output = nn.Sequential(
-            nn.Linear(h_size+y_size, 64),
+            nn.Linear(h_size + y_size, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
             nn.Sigmoid()
         )
-    def forward(self,h,y):
-        y_cat = torch.cat((h,y),dim=2)
+
+    def forward(self, h, y):
+        y_cat = torch.cat((h, y), dim=2)
         l = self.discriminator_output(y_cat)
         return l
-
 
 
 # GCN basic operation
@@ -972,9 +1111,10 @@ class GraphConv(nn.Module):
         self.output_dim = output_dim
         self.weight = nn.Parameter(torch.FloatTensor(input_dim, output_dim).cuda())
         # self.relu = nn.ReLU()
+
     def forward(self, x, adj):
         y = torch.matmul(adj, x)
-        y = torch.matmul(y,self.weight)
+        y = torch.matmul(y, self.weight)
         return y
 
 
@@ -996,22 +1136,26 @@ class GCN_encoder(nn.Module):
             elif isinstance(m, nn.BatchNorm1d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
-    def forward(self,x,adj):
-        x = self.conv1(x,adj)
+
+    def forward(self, x, adj):
+        x = self.conv1(x, adj)
         # x = x/torch.sum(x, dim=2, keepdim=True)
         x = self.relu(x)
         # x = self.bn1(x)
-        x = self.conv2(x,adj)
+        x = self.conv2(x, adj)
         # x = x / torch.sum(x, dim=2, keepdim=True)
         return x
+
+
 # vanilla GCN decoder
 class GCN_decoder(nn.Module):
     def __init__(self):
         super(GCN_decoder, self).__init__()
         # self.act = nn.Sigmoid()
-    def forward(self,x):
+
+    def forward(self, x):
         # x_t = x.view(-1,x.size(2),x.size(1))
-        x_t = x.permute(0,2,1)
+        x_t = x.permute(0, 2, 1)
         # print('x',x)
         # print('x_t',x_t)
         y = torch.matmul(x, x_t)
@@ -1021,13 +1165,14 @@ class GCN_decoder(nn.Module):
 # GCN based graph embedding
 # allowing for arbitrary num of nodes
 class GCN_encoder_graph(nn.Module):
-    def __init__(self,input_dim, hidden_dim, output_dim,num_layers):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
         super(GCN_encoder_graph, self).__init__()
         self.num_layers = num_layers
         self.conv_first = GraphConv(input_dim=input_dim, output_dim=hidden_dim)
         # self.conv_hidden1 = GraphConv(input_dim=hidden_dim, output_dim=hidden_dim)
         # self.conv_hidden2 = GraphConv(input_dim=hidden_dim, output_dim=hidden_dim)
-        self.conv_block = nn.ModuleList([GraphConv(input_dim=hidden_dim, output_dim=hidden_dim) for i in range(num_layers)])
+        self.conv_block = nn.ModuleList(
+            [GraphConv(input_dim=hidden_dim, output_dim=hidden_dim) for i in range(num_layers)])
         self.conv_last = GraphConv(input_dim=hidden_dim, output_dim=output_dim)
         self.act = nn.ReLU()
         for m in self.modules():
@@ -1036,25 +1181,27 @@ class GCN_encoder_graph(nn.Module):
                 # init_range = np.sqrt(6.0 / (m.input_dim + m.output_dim))
                 # m.weight.data = torch.rand([m.input_dim, m.output_dim]).cuda()*init_range
                 # print('find!')
-    def forward(self,x,adj):
-        x = self.conv_first(x,adj)
+
+    def forward(self, x, adj):
+        x = self.conv_first(x, adj)
         x = self.act(x)
         out_all = []
         out, _ = torch.max(x, dim=1, keepdim=True)
         out_all.append(out)
-        for i in range(self.num_layers-2):
-            x = self.conv_block[i](x,adj)
+        for i in range(self.num_layers - 2):
+            x = self.conv_block[i](x, adj)
             x = self.act(x)
-            out,_ = torch.max(x, dim=1, keepdim = True)
+            out, _ = torch.max(x, dim=1, keepdim=True)
             out_all.append(out)
-        x = self.conv_last(x,adj)
+        x = self.conv_last(x, adj)
         x = self.act(x)
-        out,_ = torch.max(x, dim=1, keepdim = True)
+        out, _ = torch.max(x, dim=1, keepdim=True)
         out_all.append(out)
-        output = torch.cat(out_all, dim = 1)
-        output = output.permute(1,0,2)
+        output = torch.cat(out_all, dim=1)
+        output = output.permute(1, 0, 2)
         # print(out)
         return output
+
 
 # x = Variable(torch.rand(1,8,10)).cuda()
 # adj = Variable(torch.rand(1,8,8)).cuda()
@@ -1070,9 +1217,9 @@ def preprocess(A):
     degrees = torch.sum(A, dim=2)
 
     # Create diagonal matrix D from the degrees of the nodes
-    D = Variable(torch.zeros(A.size(0),A.size(1),A.size(2))).cuda()
+    D = Variable(torch.zeros(A.size(0), A.size(1), A.size(2))).cuda()
     for i in range(D.size(0)):
-        D[i, :, :] = torch.diag(torch.pow(degrees[i,:], -0.5))
+        D[i, :, :] = torch.diag(torch.pow(degrees[i, :], -0.5))
     # Cholesky decomposition of D
     # D = np.linalg.cholesky(D)
     # Inverse of the Cholesky decomposition of D
@@ -1080,10 +1227,9 @@ def preprocess(A):
     # Create an identity matrix of size x size
     # Create A hat
     # Return A_hat
-    A_normal = torch.matmul(torch.matmul(D,A), D)
+    A_normal = torch.matmul(torch.matmul(D, A), D)
     # print(A_normal)
     return A_normal
-
 
 
 # a sequential GCN model, GCN with n layers
@@ -1098,12 +1244,12 @@ class GCN_generator(nn.Module):
             if isinstance(m, GraphConv):
                 m.weight.data = init.xavier_uniform(m.weight.data, gain=nn.init.calculate_gain('relu'))
 
-    def forward(self,x,teacher_force=False,adj_real=None):
+    def forward(self, x, teacher_force=False, adj_real=None):
         # x: batch * node_num * feature
         batch_num = x.size(0)
         node_num = x.size(1)
-        adj = Variable(torch.eye(node_num).view(1,node_num,node_num).repeat(batch_num,1,1)).cuda()
-        adj_output = Variable(torch.eye(node_num).view(1,node_num,node_num).repeat(batch_num,1,1)).cuda()
+        adj = Variable(torch.eye(node_num).view(1, node_num, node_num).repeat(batch_num, 1, 1)).cuda()
+        adj_output = Variable(torch.eye(node_num).view(1, node_num, node_num).repeat(batch_num, 1, 1)).cuda()
 
         # do GCN n times
         # todo: try if residual connections are plausible
@@ -1123,19 +1269,19 @@ class GCN_generator(nn.Module):
         # then do GCN rest n-1 times
         for i in range(1, node_num):
             # 1 calc prob of a new edge, output the result in adj_output
-            x_last = x[:,i:i+1,:].clone()
-            x_prev = x[:,0:i,:].clone()
+            x_last = x[:, i:i + 1, :].clone()
+            x_prev = x[:, 0:i, :].clone()
             x_prev = x_prev
             x_last = x_last
-            prob = x_prev @ x_last.permute(0,2,1)
-            adj_output[:,i,0:i] = prob.permute(0,2,1).clone()
-            adj_output[:,0:i,i] = prob.clone()
+            prob = x_prev @ x_last.permute(0, 2, 1)
+            adj_output[:, i, 0:i] = prob.permute(0, 2, 1).clone()
+            adj_output[:, 0:i, i] = prob.clone()
             # 2 update adj
             if teacher_force:
                 adj = Variable(torch.eye(node_num).view(1, node_num, node_num).repeat(batch_num, 1, 1)).cuda()
-                adj[:,0:i+1,0:i+1] = adj_real[:,0:i+1,0:i+1].clone()
+                adj[:, 0:i + 1, 0:i + 1] = adj_real[:, 0:i + 1, 0:i + 1].clone()
             else:
-                adj[:, i, 0:i] = prob.permute(0,2,1).clone()
+                adj[:, i, 0:i] = prob.permute(0, 2, 1).clone()
                 adj[:, 0:i, i] = prob.clone()
             adj = preprocess(adj)
             # print(adj)
@@ -1182,10 +1328,8 @@ class GCN_generator(nn.Module):
 #             print('node num', i, '  batch size',batch, '  run time', end-start)
 
 
-
-
 class CNN_decoder(nn.Module):
-    def __init__(self, input_size, output_size, stride = 2):
+    def __init__(self, input_size, output_size, stride=2):
 
         super(CNN_decoder, self).__init__()
 
@@ -1193,25 +1337,32 @@ class CNN_decoder(nn.Module):
         self.output_size = output_size
 
         self.relu = nn.ReLU()
-        self.deconv1_1 = nn.ConvTranspose1d(in_channels=int(self.input_size), out_channels=int(self.input_size/2), kernel_size=3, stride=stride)
-        self.bn1_1 = nn.BatchNorm1d(int(self.input_size/2))
-        self.deconv1_2 = nn.ConvTranspose1d(in_channels=int(self.input_size/2), out_channels=int(self.input_size/2), kernel_size=3, stride=stride)
-        self.bn1_2 = nn.BatchNorm1d(int(self.input_size/2))
-        self.deconv1_3 = nn.ConvTranspose1d(in_channels=int(self.input_size/2), out_channels=int(self.output_size), kernel_size=3, stride=1, padding=1)
+        self.deconv1_1 = nn.ConvTranspose1d(in_channels=int(self.input_size), out_channels=int(self.input_size / 2),
+                                            kernel_size=3, stride=stride)
+        self.bn1_1 = nn.BatchNorm1d(int(self.input_size / 2))
+        self.deconv1_2 = nn.ConvTranspose1d(in_channels=int(self.input_size / 2), out_channels=int(self.input_size / 2),
+                                            kernel_size=3, stride=stride)
+        self.bn1_2 = nn.BatchNorm1d(int(self.input_size / 2))
+        self.deconv1_3 = nn.ConvTranspose1d(in_channels=int(self.input_size / 2), out_channels=int(self.output_size),
+                                            kernel_size=3, stride=1, padding=1)
 
-        self.deconv2_1 = nn.ConvTranspose1d(in_channels=int(self.input_size/2), out_channels=int(self.input_size / 4), kernel_size=3, stride=stride)
+        self.deconv2_1 = nn.ConvTranspose1d(in_channels=int(self.input_size / 2), out_channels=int(self.input_size / 4),
+                                            kernel_size=3, stride=stride)
         self.bn2_1 = nn.BatchNorm1d(int(self.input_size / 4))
-        self.deconv2_2 = nn.ConvTranspose1d(in_channels=int(self.input_size / 4), out_channels=int(self.input_size/4), kernel_size=3, stride=stride)
+        self.deconv2_2 = nn.ConvTranspose1d(in_channels=int(self.input_size / 4), out_channels=int(self.input_size / 4),
+                                            kernel_size=3, stride=stride)
         self.bn2_2 = nn.BatchNorm1d(int(self.input_size / 4))
-        self.deconv2_3 = nn.ConvTranspose1d(in_channels=int(self.input_size / 4), out_channels=int(self.output_size), kernel_size=3, stride=1, padding=1)
+        self.deconv2_3 = nn.ConvTranspose1d(in_channels=int(self.input_size / 4), out_channels=int(self.output_size),
+                                            kernel_size=3, stride=1, padding=1)
 
-        self.deconv3_1 = nn.ConvTranspose1d(in_channels=int(self.input_size / 4), out_channels=int(self.input_size / 8), kernel_size=3, stride=stride)
+        self.deconv3_1 = nn.ConvTranspose1d(in_channels=int(self.input_size / 4), out_channels=int(self.input_size / 8),
+                                            kernel_size=3, stride=stride)
         self.bn3_1 = nn.BatchNorm1d(int(self.input_size / 8))
-        self.deconv3_2 = nn.ConvTranspose1d(in_channels=int(self.input_size / 8), out_channels=int(self.input_size / 8), kernel_size=3, stride=stride)
+        self.deconv3_2 = nn.ConvTranspose1d(in_channels=int(self.input_size / 8), out_channels=int(self.input_size / 8),
+                                            kernel_size=3, stride=stride)
         self.bn3_2 = nn.BatchNorm1d(int(self.input_size / 8))
-        self.deconv3_3 = nn.ConvTranspose1d(in_channels=int(self.input_size / 8), out_channels=int(self.output_size), kernel_size=3, stride=1, padding=1)
-
-
+        self.deconv3_3 = nn.ConvTranspose1d(in_channels=int(self.input_size / 8), out_channels=int(self.output_size),
+                                            kernel_size=3, stride=1, padding=1)
 
         for m in self.modules():
             if isinstance(m, nn.ConvTranspose1d):
@@ -1221,8 +1372,6 @@ class CNN_decoder(nn.Module):
             elif isinstance(m, nn.BatchNorm1d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
-
-
 
     def forward(self, x):
         '''
@@ -1266,9 +1415,7 @@ class CNN_decoder(nn.Module):
         x_hop3 = self.deconv3_3(x)
         # print(x_hop3.size())
 
-
-
-        return x_hop1,x_hop2,x_hop3
+        return x_hop1, x_hop2, x_hop3
 
         # # reference code for doing residual connections
         # def _make_layer(self, block, planes, blocks, stride=1):
@@ -1289,9 +1436,6 @@ class CNN_decoder(nn.Module):
         #     return nn.Sequential(*layers)
 
 
-
-
-
 class CNN_decoder_share(nn.Module):
     def __init__(self, input_size, output_size, stride, hops):
         super(CNN_decoder_share, self).__init__()
@@ -1301,9 +1445,11 @@ class CNN_decoder_share(nn.Module):
         self.hops = hops
 
         self.relu = nn.ReLU()
-        self.deconv = nn.ConvTranspose1d(in_channels=int(self.input_size), out_channels=int(self.input_size), kernel_size=3, stride=stride)
+        self.deconv = nn.ConvTranspose1d(in_channels=int(self.input_size), out_channels=int(self.input_size),
+                                         kernel_size=3, stride=stride)
         self.bn = nn.BatchNorm1d(int(self.input_size))
-        self.deconv_out = nn.ConvTranspose1d(in_channels=int(self.input_size), out_channels=int(self.output_size), kernel_size=3, stride=1, padding=1)
+        self.deconv_out = nn.ConvTranspose1d(in_channels=int(self.input_size), out_channels=int(self.output_size),
+                                             kernel_size=3, stride=1, padding=1)
 
         for m in self.modules():
             if isinstance(m, nn.ConvTranspose1d):
@@ -1313,8 +1459,6 @@ class CNN_decoder_share(nn.Module):
             elif isinstance(m, nn.BatchNorm1d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
-
-
 
     def forward(self, x):
         '''
@@ -1359,10 +1503,7 @@ class CNN_decoder_share(nn.Module):
         x_hop3 = self.deconv_out(x)
         # print(x_hop3.size())
 
-
-
-        return x_hop1,x_hop2,x_hop3
-
+        return x_hop1, x_hop2, x_hop3
 
 
 class CNN_decoder_attention(nn.Module):
@@ -1380,7 +1521,7 @@ class CNN_decoder_attention(nn.Module):
         self.deconv_out = nn.ConvTranspose1d(in_channels=int(self.input_size), out_channels=int(self.output_size),
                                              kernel_size=3, stride=1, padding=1)
         self.deconv_attention = nn.ConvTranspose1d(in_channels=int(self.input_size), out_channels=int(self.input_size),
-                                             kernel_size=1, stride=1, padding=0)
+                                                   kernel_size=1, stride=1, padding=0)
         self.bn_attention = nn.BatchNorm1d(int(self.input_size))
         self.relu_leaky = nn.LeakyReLU(0.2)
 
@@ -1414,10 +1555,9 @@ class CNN_decoder_attention(nn.Module):
         # x_hop1_attention = self.bn_attention(x_hop1_attention)
         x_hop1_attention = self.relu(x_hop1_attention)
         x_hop1_attention = torch.matmul(x_hop1_attention,
-                                        x_hop1_attention.view(-1,x_hop1_attention.size(2),x_hop1_attention.size(1)))
+                                        x_hop1_attention.view(-1, x_hop1_attention.size(2), x_hop1_attention.size(1)))
         # x_hop1_attention_sum = torch.norm(x_hop1_attention, 2, dim=1, keepdim=True)
         # x_hop1_attention = x_hop1_attention/x_hop1_attention_sum
-
 
         # print(x_hop1.size())
 
@@ -1439,7 +1579,6 @@ class CNN_decoder_attention(nn.Module):
         # x_hop2_attention_sum = torch.norm(x_hop2_attention, 2, dim=1, keepdim=True)
         # x_hop2_attention = x_hop2_attention/x_hop2_attention_sum
 
-
         # print(x_hop2.size())
 
         # hop3
@@ -1460,16 +1599,9 @@ class CNN_decoder_attention(nn.Module):
         # x_hop3_attention_sum = torch.norm(x_hop3_attention, 2, dim=1, keepdim=True)
         # x_hop3_attention = x_hop3_attention / x_hop3_attention_sum
 
-
         # print(x_hop3.size())
 
-
-
         return x_hop1, x_hop2, x_hop3, x_hop1_attention, x_hop2_attention, x_hop3_attention
-
-
-
-
 
 
 #### test code ####
@@ -1486,9 +1618,9 @@ class Graphsage_Encoder(nn.Module):
         self.input_size = input_size
 
         # linear for hop 3
-        self.linear_3_0 = nn.Linear(input_size*(2 ** 0), input_size*(2 ** 1))
-        self.linear_3_1 = nn.Linear(input_size*(2 ** 1), input_size*(2 ** 2))
-        self.linear_3_2 = nn.Linear(input_size*(2 ** 2), input_size*(2 ** 3))
+        self.linear_3_0 = nn.Linear(input_size * (2 ** 0), input_size * (2 ** 1))
+        self.linear_3_1 = nn.Linear(input_size * (2 ** 1), input_size * (2 ** 2))
+        self.linear_3_2 = nn.Linear(input_size * (2 ** 2), input_size * (2 ** 3))
         # linear for hop 2
         self.linear_2_0 = nn.Linear(input_size * (2 ** 0), input_size * (2 ** 1))
         self.linear_2_1 = nn.Linear(input_size * (2 ** 1), input_size * (2 ** 2))
@@ -1497,8 +1629,7 @@ class Graphsage_Encoder(nn.Module):
         # linear for hop 0
         self.linear_0_0 = nn.Linear(input_size * (2 ** 0), input_size * (2 ** 1))
 
-        self.linear = nn.Linear(input_size*(2+2+4+8), input_size*(16))
-
+        self.linear = nn.Linear(input_size * (2 + 2 + 4 + 8), input_size * (16))
 
         self.bn_3_0 = nn.BatchNorm1d(self.input_size * (2 ** 1))
         self.bn_3_1 = nn.BatchNorm1d(self.input_size * (2 ** 2))
@@ -1511,16 +1642,15 @@ class Graphsage_Encoder(nn.Module):
 
         self.bn_0_0 = nn.BatchNorm1d(self.input_size * (2 ** 1))
 
-        self.bn = nn.BatchNorm1d(input_size*(16))
+        self.bn = nn.BatchNorm1d(input_size * (16))
 
         self.relu = nn.ReLU()
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                m.weight.data = init.xavier_uniform(m.weight.data,gain=nn.init.calculate_gain('relu'))
+                m.weight.data = init.xavier_uniform(m.weight.data, gain=nn.init.calculate_gain('relu'))
             elif isinstance(m, nn.BatchNorm1d):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
-
 
     def forward(self, nodes_list, nodes_count_list):
         '''
@@ -1532,47 +1662,50 @@ class Graphsage_Encoder(nn.Module):
         :return:
         '''
 
-
         # 3-hop feature
         # nodes original features to representations
         nodes_list[0] = Variable(nodes_list[0]).cuda()
         nodes_list[0] = self.linear_projection(nodes_list[0])
         nodes_features = self.linear_3_0(nodes_list[0])
-        nodes_features = self.bn_3_0(nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1)))
-        nodes_features = nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1))
+        nodes_features = self.bn_3_0(nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1)))
+        nodes_features = nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1))
         nodes_features = self.relu(nodes_features)
         # nodes count from previous hop
         nodes_count = nodes_count_list[0]
         # print(nodes_count,nodes_count.size())
         # aggregated representations placeholder, feature dim * 2
-        nodes_features_farther = Variable(torch.Tensor(nodes_features.size(0), nodes_count.size(1), nodes_features.size(2))).cuda()
+        nodes_features_farther = Variable(
+            torch.Tensor(nodes_features.size(0), nodes_count.size(1), nodes_features.size(2))).cuda()
         i = 0
         for j in range(nodes_count.size(1)):
             # mean pooling for each father node
             # print(nodes_count[:,j][0],type(nodes_count[:,j][0]))
-            nodes_features_farther[:,j,:] = torch.mean(nodes_features[:, i:i+int(nodes_count[:,j][0]), :], 1, keepdim = False)
-            i += int(nodes_count[:,j][0])
+            nodes_features_farther[:, j, :] = torch.mean(nodes_features[:, i:i + int(nodes_count[:, j][0]), :], 1,
+                                                         keepdim=False)
+            i += int(nodes_count[:, j][0])
         # assign node_features
         nodes_features = nodes_features_farther
         nodes_features = self.linear_3_1(nodes_features)
-        nodes_features = self.bn_3_1(nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1)))
-        nodes_features = nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1))
+        nodes_features = self.bn_3_1(nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1)))
+        nodes_features = nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1))
         nodes_features = self.relu(nodes_features)
         # nodes count from previous hop
         nodes_count = nodes_count_list[1]
         # aggregated representations placeholder, feature dim * 2
-        nodes_features_farther = Variable(torch.Tensor(nodes_features.size(0), nodes_count.size(1), nodes_features.size(2))).cuda()
+        nodes_features_farther = Variable(
+            torch.Tensor(nodes_features.size(0), nodes_count.size(1), nodes_features.size(2))).cuda()
         i = 0
         for j in range(nodes_count.size(1)):
             # mean pooling for each father node
-            nodes_features_farther[:,j,:] = torch.mean(nodes_features[:, i:i+int(nodes_count[:,j][0]), :], 1, keepdim = False)
-            i += int(nodes_count[:,j][0])
+            nodes_features_farther[:, j, :] = torch.mean(nodes_features[:, i:i + int(nodes_count[:, j][0]), :], 1,
+                                                         keepdim=False)
+            i += int(nodes_count[:, j][0])
         # assign node_features
         nodes_features = nodes_features_farther
         # print('nodes_feature',nodes_features.size())
         nodes_features = self.linear_3_2(nodes_features)
-        nodes_features = self.bn_3_2(nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1)))
-        nodes_features = nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1))
+        nodes_features = self.bn_3_2(nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1)))
+        nodes_features = nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1))
         # nodes_features = self.relu(nodes_features)
         # nodes count from previous hop
         nodes_features_hop_3 = torch.mean(nodes_features, 1, keepdim=True)
@@ -1583,41 +1716,41 @@ class Graphsage_Encoder(nn.Module):
         nodes_list[1] = Variable(nodes_list[1]).cuda()
         nodes_list[1] = self.linear_projection(nodes_list[1])
         nodes_features = self.linear_2_0(nodes_list[1])
-        nodes_features = self.bn_2_0(nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1)))
-        nodes_features = nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1))
+        nodes_features = self.bn_2_0(nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1)))
+        nodes_features = nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1))
         nodes_features = self.relu(nodes_features)
         # nodes count from previous hop
         nodes_count = nodes_count_list[1]
         # aggregated representations placeholder, feature dim * 2
-        nodes_features_farther = Variable(torch.Tensor(nodes_features.size(0), nodes_count.size(1), nodes_features.size(2))).cuda()
+        nodes_features_farther = Variable(
+            torch.Tensor(nodes_features.size(0), nodes_count.size(1), nodes_features.size(2))).cuda()
         i = 0
         for j in range(nodes_count.size(1)):
             # mean pooling for each father node
-            nodes_features_farther[:,j,:] = torch.mean(nodes_features[:, i:i+int(nodes_count[:,j][0]), :], 1, keepdim = False)
-            i += int(nodes_count[:,j][0])
+            nodes_features_farther[:, j, :] = torch.mean(nodes_features[:, i:i + int(nodes_count[:, j][0]), :], 1,
+                                                         keepdim=False)
+            i += int(nodes_count[:, j][0])
         # assign node_features
         nodes_features = nodes_features_farther
         nodes_features = self.linear_2_1(nodes_features)
-        nodes_features = self.bn_2_1(nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1)))
-        nodes_features = nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1))
+        nodes_features = self.bn_2_1(nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1)))
+        nodes_features = nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1))
         # nodes_features = self.relu(nodes_features)
         # nodes count from previous hop
         nodes_features_hop_2 = torch.mean(nodes_features, 1, keepdim=True)
         # print(nodes_features_hop_2.size())
-
 
         # 1-hop feature
         # nodes original features to representations
         nodes_list[2] = Variable(nodes_list[2]).cuda()
         nodes_list[2] = self.linear_projection(nodes_list[2])
         nodes_features = self.linear_1_0(nodes_list[2])
-        nodes_features = self.bn_1_0(nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1)))
-        nodes_features = nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1))
+        nodes_features = self.bn_1_0(nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1)))
+        nodes_features = nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1))
         # nodes_features = self.relu(nodes_features)
         # nodes count from previous hop
         nodes_features_hop_1 = torch.mean(nodes_features, 1, keepdim=True)
         # print(nodes_features_hop_1.size())
-
 
         # own feature
         nodes_list[3] = Variable(nodes_list[3]).cuda()
@@ -1627,16 +1760,11 @@ class Graphsage_Encoder(nn.Module):
         nodes_features_hop_0 = nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1))
         # print(nodes_features_hop_0.size())
 
-
-
         # concatenate
-        nodes_features = torch.cat((nodes_features_hop_0, nodes_features_hop_1, nodes_features_hop_2, nodes_features_hop_3),dim=2)
+        nodes_features = torch.cat(
+            (nodes_features_hop_0, nodes_features_hop_1, nodes_features_hop_2, nodes_features_hop_3), dim=2)
         nodes_features = self.linear(nodes_features)
         # nodes_features = self.bn(nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1)))
-        nodes_features = nodes_features.view(-1,nodes_features.size(2),nodes_features.size(1))
+        nodes_features = nodes_features.view(-1, nodes_features.size(2), nodes_features.size(1))
         # print(nodes_features.size())
-        return(nodes_features)
-
-
-
-
+        return (nodes_features)
