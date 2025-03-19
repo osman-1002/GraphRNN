@@ -21,25 +21,56 @@ import time
 
 
 
-def binary_cross_entropy_weight(y_pred, y,has_weight=False, weight_length=1, weight_max=10):
-    '''
+# def binary_cross_entropy_weight(y_pred, y,has_weight=False, weight_length=1, weight_max=10):
+#     '''
 
-    :param y_pred:
-    :param y:
-    :param weight_length: how long until the end of sequence shall we add weight
-    :param weight_value: the magnitude that the weight is enhanced
-    :return:
+#     :param y_pred:
+#     :param y:
+#     :param weight_length: how long until the end of sequence shall we add weight
+#     :param weight_value: the magnitude that the weight is enhanced
+#     :return:
+#     '''
+#     if has_weight:
+#         weight = torch.ones(y.size(0),y.size(1),y.size(2))
+#         weight_linear = torch.arange(1,weight_length+1)/weight_length*weight_max
+#         weight_linear = weight_linear.view(1,weight_length,1).repeat(y.size(0),1,y.size(2))
+#         weight[:,-1*weight_length:,:] = weight_linear
+#         loss = F.binary_cross_entropy(y_pred, y, weight=weight.cuda())
+#     else:
+#         loss = F.binary_cross_entropy(y_pred, y)
+#     return loss
+
+def binary_cross_entropy_weight(y_pred, y, has_weight=False, weight_length=1, weight_max=10):
     '''
+    :param y_pred: Model's raw logits (before sigmoid).
+    :param y: Ground truth labels.
+    :param has_weight: Whether to apply weighting.
+    :param weight_length: Length of the sequence for applying weight.
+    :param weight_max: Maximum weight value.
+    :return: Weighted binary cross entropy loss.
+    '''
+    # Ensure input tensors are on the same device
+    assert torch.all((y == 0) | (y == 1)), "Target values must be binary (0 or 1)"
+    device = y_pred.device
     if has_weight:
-        weight = torch.ones(y.size(0),y.size(1),y.size(2))
-        weight_linear = torch.arange(1,weight_length+1)/weight_length*weight_max
-        weight_linear = weight_linear.view(1,weight_length,1).repeat(y.size(0),1,y.size(2))
-        weight[:,-1*weight_length:,:] = weight_linear
-        loss = F.binary_cross_entropy(y_pred, y, weight=weight.cuda())
-    else:
-        loss = F.binary_cross_entropy(y_pred, y)
-    return loss
+        
+        weight = torch.ones(y.size(0), y.size(1), y.size(2), device=device)
+        print(weight.size(), y_pred.size(), y.size())  # Check if all sizes are the same
+        weight_linear = torch.arange(1, weight_length + 1, device=device) / weight_length * weight_max
+        weight_linear = weight_linear.view(1, weight_length, 1).repeat(y.size(0), 1, y.size(2))
+        weight[:, -weight_length:, :] = weight_linear
 
+        # Ensure no NaN or Inf values in y_pred or y
+        assert torch.all(torch.isfinite(y_pred)), "y_pred contains NaN or Inf values"
+        assert torch.all(torch.isfinite(y)), "y contains NaN or Inf values"
+        
+        # Apply binary cross entropy loss with the weight
+        loss = F.binary_cross_entropy(y_pred, y, weight=weight)
+    else:
+        # Standard binary cross entropy loss without weight
+        loss = F.binary_cross_entropy(y_pred, y)
+    
+    return loss
 
 def sample_tensor(y,sample=True, thresh=0.5):
     # do sampling
@@ -467,32 +498,29 @@ class GRU_plain_dec(nn.Module):
         self.has_input = has_input
         self.has_output = has_output
 
-        # Input layer to project input_size to embedding_size
+        # Input projection
         if has_input:
             self.input = nn.Linear(input_size, embedding_size)
-        else:
-            self.input = None
+            self.relu = nn.ReLU()
+        
+        # GRU
+        self.rnn = nn.GRU(input_size=embedding_size + hidden_size,  # Concatenating graph_embedding
+                          hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
 
-        # GRU layer for processing sequences
-        self.rnn = nn.GRU(input_size=embedding_size, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
-
-        # Output layer to project hidden states to output_size
+        # Output projection
         if has_output:
             self.output = nn.Sequential(
                 nn.Linear(hidden_size, embedding_size),
                 nn.ReLU(),
                 nn.Linear(embedding_size, output_size)
             )
-        else:
-            self.output = None
 
-        # Activation function
-        self.relu = nn.ReLU()
-
-        # Initialize hidden state
-        self.hidden = None
+       
 
         # Parameter initialization
+        self._init_weights()
+
+    def _init_weights(self):
         for name, param in self.rnn.named_parameters():
             if 'bias' in name:
                 nn.init.constant_(param, 0.25)
@@ -503,58 +531,75 @@ class GRU_plain_dec(nn.Module):
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
 
-    # def init_hidden(self, batch_size, device):
-    #     # Initialize hidden state with zeros
-    #     return torch.zeros(self.num_layers, batch_size, self.hidden_size).to(device)
-    def init_hidden(self, batch_size, device):
-        return torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
-    def forward(self, input_raw, graph_embedding, pack=False, input_len=None):
-        # Prepare input
-        if self.has_input:
-            input = self.input(input_raw)
-            input = self.relu(input)
-        else:
-            input = input_raw
-
-        # Expand graph embedding to match sequence length
-        batch_size, seq_len, _ = input.shape
-        #print("Shape of graph_embedding before unsqueeze:", graph_embedding.shape)
-        if graph_embedding.dim() == 2:  # Ensure it has the correct number of dimensions
-            graph_embedding = graph_embedding.unsqueeze(1).expand(-1, seq_len, -1)
+    def init_hidden(self, graph_embedding):
+        """
+        Initializes the GRU hidden state using the graph embedding from GraphEncoder.
         
-        # Concatenate graph embedding with input
-        graph_embedding = graph_embedding.expand(input.size(0), -1, -1)
-        # print("Shape of input:", input.shape)  # Expected: [batch_size, seq_len, feature_size]
-        # print("Shape of graph_embedding:", graph_embedding.shape)  # Expected: [batch_size, 1, hidden_size]
-        # input = torch.cat([input, graph_embedding], dim=-1)
-        # projection = nn.Linear(192, 64).to(input.device)
-        input = graph_embedding
-        # Create projection layer dynamically based on input size
-        input_size = input.shape[-1]  # Get the last dimension of input dynamically
-        output_size = min(64, input_size // 2)  # Example: half the input size but not more than 64
-        projection = nn.Linear(input_size, output_size).to(input.device)
-        #projection = nn.Linear(128, 64).to(input.device)
-        input = projection(input)
+        Args:
+            graph_embedding (Tensor): The output of GraphEncoder (shape: batch_size x hidden_size)
+            
+        Returns:
+            Tensor: Initialized hidden state of shape (num_layers, batch_size, hidden_size)
+        """
+        # Expand graph_embedding to match GRU's hidden state dimensions
+        hidden = graph_embedding.expand(self.num_layers, -1, -1).contiguous()  
+        return hidden  # Shape: (num_layers, batch_size, hidden_size)
 
+    def forward(self, edge_seq, graph_embedding, hidden=None):
+        edge_embedding = nn.Linear(2, 64).cuda()  # Expand 2D edge features to embedding size
+        # edge_seq = edge_embedding(edge_seq)  # Transform shape (batch_size, seq_len, 2) → (batch_size, seq_len, embedding_size_rnn)
+        # Unpack the sequence
+        if isinstance(edge_seq, PackedSequence):
+            edge_seq, _ = pad_packed_sequence(edge_seq, batch_first=True)
+        batch_size, seq_len, feat_dim = edge_seq.shape  # (32, 327, 2)
+        # print(f"Edge seq shape before projection: {edge_seq.shape}")  # Debugging print
+        # print(f"Expected input size: {self.input.in_features}")  # Debugging print
+        # Ensure input size matches expected feature dimension
+        assert feat_dim == self.input.in_features, f"Expected {self.input.in_features}, got {feat_dim}"
 
-        # input = torch.cat([input, graph_embedding], dim=-1)
+        # Reshape to (batch_size * seq_len, input_size) before applying Linear layer
+        edge_seq = edge_seq.view(-1, feat_dim)  # Shape: (32*327, 2) -> (10464, 2)
 
-        # Pack sequences if necessary
-        if pack:
-            input = pack_padded_sequence(input, input_len, batch_first=True)
+        # Apply input projection
+        edge_seq = self.relu(self.input(edge_seq))  # Shape: (10464, embedding_size)
 
-        # Forward pass through GRU
-        output_raw, self.hidden = self.rnn(input, self.hidden)
+        # Reshape back to (batch_size, seq_len, embedding_size)
+        edge_seq = edge_seq.view(batch_size, seq_len, -1)  # Shape: (32, 327, embedding_size)
 
-        # Unpack sequences if necessary
-        if pack:
-            output_raw = pad_packed_sequence(output_raw, batch_first=True)[0]
+        # # Expand graph embedding
+        # if graph_embedding.dim() == 2:
+        #     graph_embedding = graph_embedding.unsqueeze(1).expand(-1, seq_len, -1)
 
-        # Forward pass through output layer
+        # Concatenate input with graph embedding
+        graph_embedding = graph_embedding.squeeze(0)  # Ensure correct shape
+        graph_embedding = graph_embedding.unsqueeze(1).expand(edge_seq.shape[0], edge_seq.shape[1], -1)
+        
+        input_seq = torch.cat([edge_seq, graph_embedding], dim=-1)
+        #input_seq = torch.cat([edge_seq, graph_embedding], dim=-1)  # Shape: (32, 327, embedding_size + hidden_size)
+        # print(f"input_seq shape: {input_seq.shape}")
+        # print(hidden.shape)
+        # RNN forward pass
+        output_seq, hidden = self.rnn(input_seq, hidden)
+
+        # Pass through output layer if applicable
         if self.has_output:
-            output_raw = self.output(output_raw)
+            # print(f"Output seq shape before Linear layer: {output_seq.shape}")  
+            # print(f"Expected Linear layer input features: {self.output[0].in_features}")  
 
-        return output_raw
+
+            batch_size, seq_len, hidden_dim = output_seq.shape  # (32, 259, 128)
+    
+            # Flatten output_seq to (batch_size * seq_len, hidden_dim) before passing to Linear
+            output_seq = output_seq.reshape(-1, hidden_dim)  # Shape: (32*259, 128)
+            # print(f"Output seq shape after flattening: {output_seq.shape}")
+            # Apply output projection layers
+            assert output_seq.shape[-1] == 128, f"Expected last dim 128, got {output_seq.shape[-1]}"
+            output_seq = self.output(output_seq)
+            
+            # Reshape back to original sequence format
+            output_seq = output_seq.reshape(batch_size, seq_len, -1)  # Shape: (32, 259, output_size) 
+
+        return output_seq, hidden.detach()
 
 class Attention(nn.Module):
     def __init__(self, hidden_size):
@@ -585,16 +630,6 @@ class Attention(nn.Module):
         return context_vector, scores
 
 
-# Example usage
-if __name__ == "__main__":
-    batch_size = 4
-    encoder_output = torch.randn(batch_size, 128)  # Fake encoder output
-
-    decoder = GraphRNNDecoder(input_dim=128, hidden_dim=64, output_dim=1)
-    nodes, edges = decoder(encoder_output, max_nodes=5)
-
-    print("Generated Nodes Shape:", nodes.shape)
-    print("Generated Edges Shape:", edges.shape)
 
 class GRU_plain_with_attention(nn.Module):
     def __init__(self, input_size, embedding_size, hidden_size, num_layers, has_input=True, has_output=False, output_size=None):

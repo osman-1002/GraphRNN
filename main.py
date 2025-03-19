@@ -135,26 +135,25 @@ if __name__ == '__main__':
     ## Graph RNN VAE model
     # lstm = LSTM_plain(input_size=args.max_prev_node, embedding_size=args.embedding_size_lstm,
     #                   hidden_size=args.hidden_size, num_layers=args.num_layers).cuda()
-
+    for batch_data in dataset_loader:
+        for key, value in batch_data.items():
+            print(f"{key}: shape {value.shape}")
+        args.max_prev_node = batch_data["edge_seq"].shape[-1]  # Automatically set input size
+        break  # Only need to check once
+    args.max_prev_node=80
     # Initialize models
     encoder = GraphEncoder(input_dim=80, hidden_dim=args.hidden_size_rnn, 
                            output_dim=args.hidden_size_rnn, num_layers=args.num_layers, 
                            use_attention=False).cuda()
-
     rnn = GRU_plain_dec(input_size=args.max_prev_node, embedding_size=args.embedding_size_rnn,
                         hidden_size=args.hidden_size_rnn, num_layers=args.num_layers, has_input=True,
-                        has_output=True, output_size=args.hidden_size_rnn_output).cuda()
+                        has_output=True, output_size=80).cuda()
     output = GRU_plain_dec(input_size=1, embedding_size=args.embedding_size_rnn_output,
                         hidden_size=args.hidden_size_rnn_output, num_layers=args.num_layers, has_input=True,
                         has_output=True, output_size=1).cuda()    
-        # Debugging: Print batch_data info in train_dec
-    for batch_data in dataset_loader:
-        print("Type of batch_data:", type(batch_data))
-        if isinstance(batch_data, dict):
-            print("batch_data keys:", batch_data.keys())
-            print("Sample content of batch_data:", {k: v.shape if hasattr(v, 'shape') else type(v) for k, v in batch_data.items()})
-        break  # Only print for the first batch
+
     ### start training
+
     train_dec(args, dataset_loader, dataset_test, encoder, rnn, output)
 
     ### graph completion

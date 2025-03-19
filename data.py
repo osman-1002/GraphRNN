@@ -230,6 +230,41 @@ def decode_adj(adj_output):
 
     return adj_full
 
+import numpy as np
+
+def dec_decode_adj(output_seq, threshold=0.5, max_nodes=64):
+    """
+    Convert an output sequence into an adjacency matrix.
+
+    Args:
+        output_seq (numpy.ndarray): Shape (num_nodes, num_nodes) with edge scores.
+        threshold (float): Threshold for converting scores into binary values.
+        max_nodes (int): Maximum allowed number of nodes.
+
+    Returns:
+        numpy.ndarray: Binary adjacency matrix of shape (max_nodes, max_nodes).
+    """
+    num_nodes = min(output_seq.shape[0], max_nodes)
+    
+    # Ensure output_seq is at most (max_nodes, max_nodes)
+    output_seq = output_seq[:num_nodes, :num_nodes]
+
+    # Initialize adjacency matrix with the same shape as output_seq
+    adj_matrix = np.zeros_like(output_seq, dtype=int)
+
+    # Apply thresholding to construct adjacency matrix
+    adj_matrix[output_seq > threshold] = 1
+
+    # Ensure symmetry
+    adj_matrix = np.triu(adj_matrix, 1)  # Upper triangular part
+    adj_matrix = adj_matrix + adj_matrix.T  # Reflect to lower triangle
+
+    # Remove self-loops
+    np.fill_diagonal(adj_matrix, 0)
+
+    return adj_matrix
+
+
 
 def encode_adj_flexible(adj):
     '''
