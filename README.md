@@ -31,111 +31,65 @@ For baseline models:
 * the DeepGMG model was implemented based on the instructions of their [paper](https://arxiv.org/abs/1803.03324) in `main_DeepGMG.py`.
 * the GraphVAE model was implemented based on the instructions of their [paper](https://arxiv.org/abs/1802.03480) in `baselines/graphvae`.
 
-# What has been added?
 
-Although the `GRU_plain_with_attention` is yet to produce desired results, and is with some apparent problems in its output, these are the intended changes and how it differs from the original:
+# GraphRNN Modifications Report
 
-##Comparison of `GRU_plain` and `GRU_plain_with_attention`
+## 1. Introduction
+This report highlights the key modifications made over the original GraphRNN, focusing on architectural improvements and their potential benefits. These changes introduce refinements aimed at enhancing the model’s ability to process sequential data while incorporating graph structures.
 
+## 2. Key Modifications
 
-## 1. **Attention Mechanism**
-- **in `GRU_plain_with_attention`**:
-  - Uses a custom `Attention` class to compute attention scores over the RNN outputs.
-  - Produces a context vector through a weighted sum of the RNN outputs.
+### 2.1 Integration of Graph Embedding
+- In original `GRU_plain`, the GRU processes raw input or an embedded representation.
+- `GRU_plain_dec` introduces a graph embedding that is concatenated with the input sequence.
+- This enhancement allows the model to incorporate global structural information, potentially improving sequence generation by leveraging prior context.
 
----
+### 2.2 Data-Driven Hidden State Initialization
+- `GRU_plain` initializes the hidden state as a zero tensor, offering no prior information.
+- `GRU_plain_dec` instead initializes the hidden state using the graph embedding.
+- This enables the model to start from a more meaningful latent state, improving learning efficiency and the handling of long-term dependencies.
 
-## 2. **Layer Normalization**
-- **GRU_plain_with_attention**:
-  - Applies `LayerNorm` to the RNN outputs before proceeding further.
+### 2.3 Concatenation of Additional Features in GRU Input
+- In `GRU_plain`, the GRU processes only input features.
+- `GRU_plain_dec` concatenates edge sequence embeddings with the graph embedding before feeding them into the GRU.
+- This modification enhances the model’s ability to capture structural dependencies within the input data.
 
----
+### 2.4 Structured Weight Initialization
+- `GRU_plain_dec` centralizes weight initialization in a dedicated `_init_weights()` method.
 
+## 3. Addition of GraphEncoder
+The changes include an additional component, `GraphEncoder`, which extracts graph-level embeddings. This module comprises:
 
-## 3. **Output Handling**
-- **GRU_plain**:
-  - Outputs the raw RNN output (or applies an output layer if `has_output=True`).
-- **GRU_plain_with_attention**:
-  - Uses the attention-derived `context_vector` as the primary output.
-  - Optionally passes the `context_vector` through an output layer if `has_output=True`.
+- **Graph Convolutions (GCN Layer):** Processes node features to extract meaningful representations.
+- **Global Mean Pooling:** Aggregates node features into a fixed-size embedding.
+- **Linear Projection:** Matches the output dimension to the GRU hidden state size.
 
----
+By incorporating `GraphEncoder`, `GRU_plain_dec` improves context-awareness and enhances its ability to generate sequences with structural information.
 
-## 4. **Initialization of Parameters**
-- Both classes initialize weights using Xavier initialization and biases with constant values.
-- The code for parameter initialization is almost identical.
+## 4. Comparison of Forward Methods
 
----
+### 4.1 `GRU_plain` Forward Method
+- Processes the input sequence directly through the GRU network.
+- Initializes the hidden state as a zero tensor, providing no prior knowledge.
+- Passes the sequence through the RNN without considering graph structures.
+- A straightforward approach but lacks structural awareness.
 
-## 5. **Changes in `forward` Method**
-| **Aspect**                 | **GRU_plain**                                | **GRU_plain_with_attention**               |
-|----------------------------|---------------------------------------------|-------------------------------------------|
-| **RNN Output**             | Directly uses the RNN output.               | Passes the RNN output through attention. |
-| **Normalization**          | Not applied.                                | Applies layer normalization.             |
-| **Attention Mechanism**    | Not present.                                | Computes attention scores and context vector. |
-| **Packed Sequences**       | Handles packed sequences.                   | Handles packed sequences similarly, with additional attention logic. |
-| **Output**                 | RNN output (or processed output).           | Attention-derived context vector (or processed output). |
+### 4.2 `GRU_plain_dec` Forward Method
+- Integrates graph embeddings into sequence processing.
+- Uses a graph embedding from `GraphEncoder` instead of a zero-initialized hidden state.
+- Normalizes and concatenates the edge sequence with input features before passing them into the GRU.
+- This approach enables the model to leverage both sequential and graph-based dependencies.
 
----
+## 5. Summary
+`GRU_plain_dec` introduces several refinements to improve the handling of graph-based sequential data. The key improvements include:
 
-## Differences Between `train_rnn_epoch_with_attention` and `train_rnn_epoch`
+- Integration of graph embeddings for better contextual understanding.
+- More informed hidden state initialization for improved learning efficiency.
+- Structured weight initialization to enhance consistency.
+- `GraphEncoder` integration for richer graph-based information.
 
+The aim here is to offer incremental improvements that make the model more effective in handling structured graph-related data.
 
----
-
-### 1. **Hidden State Handling**
-   - **With Attention (`train_rnn_epoch_with_attention`)**:
-     - The RNN's hidden state is manipulated by adding `hidden_null` for remaining layers after the initial hidden state.
-     - The model utilizes attention to compute context vectors and attention scores (`context_vector, attention_scores = rnn(x, pack=True, input_len=y_len)`).
-   
-   - **Without Attention (`train_rnn_epoch`)**:
-     - Hidden state handling is more straightforward, with the RNN output directly used as the hidden state for the output module.
-     - No explicit attention mechanism is applied.
-
----
-
-### 2. **Forward Pass**
-   - **With Attention (`train_rnn_epoch_with_attention`)**:
-     - The model computes `context_vector` and `attention_scores` from the RNN output. 
-     - These are used as part of the hidden state in the output module: `output.hidden = torch.cat((context_vector, hidden_null), dim=0)`.
-   
-   - **Without Attention (`train_rnn_epoch`)**:
-     - The model directly computes the hidden state for the output module without any context vector or attention-based transformations.
-
----
-
-### 3. **Graph Generation**
-   - **With Attention (`test_rnn_with_attention_epoch`)**:
-     - During testing, the attention mechanism influences the graph prediction by using the RNN's context vector and attention scores to guide the graph generation. Attention is involved in producing outputs over multiple time steps.
-   
-   - **Without Attention (`test_rnn_epoch`)**:
-     - The process of graph generation during testing is simpler and does not involve attention scores. The model directly generates graphs based on the RNN’s output at each time step.
-
----
-
-### 4. **Attention Mechanism**
-   - **With Attention (`train_rnn_epoch_with_attention`)**:
-     - Explicit attention scores are used in the training process to modify the output prediction (`output_y_pred_step = output(output_x_step)`), and a sigmoid function is applied to the predictions to generate final outputs.
-   
-   - **Without Attention (`train_rnn_epoch`)**:
-     - There is no mention or use of attention scores. The model simply applies a sigmoid function to the RNN's output: `y_pred = F.sigmoid(y_pred)`.
-
----
-
-
-### Summary Table
-
-| Feature                              | `train_rnn_epoch_with_attention`                                | `train_rnn_epoch`                                              |
-|--------------------------------------|------------------------------------------------------------------|---------------------------------------------------------------|
-| **Attention Mechanism**              | Used in both training and testing.                               | Not used.                                                     |
-| **Hidden State Handling**            | Modified by attention context vector.                           | Standard hidden state propagation without attention.           |
-| **Forward Pass**                      | Attention scores and context vectors influence predictions.     | Direct use of RNN output without attention.                    |
-| **Loss Calculation**                  | Involves attention-modified output.                             | Direct loss computation from the RNN output.                   |
-| **Graph Generation**                  | Attention is involved in generating graphs.                     | Direct graph generation without attention.                     |
-| **Output Handling**                   | Step-by-step prediction with attention.                         | Direct prediction without attention.                           |
-| **Sequence Packing**                 | Packing handled with attention scores.                          | Standard packing and padding of sequences.                     |
-
----
 
 
 After stabilizing the current version, it is also planned to apply these implemetations to other rnn models.
