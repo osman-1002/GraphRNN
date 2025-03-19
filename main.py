@@ -7,7 +7,7 @@ if __name__ == '__main__':
 
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.cuda)
     print('CUDA', args.cuda)
-    print('File name prefix', args.fname)
+    print('File name prefix',args.fname)
     # check if necessary directories exist
     if not os.path.isdir(args.model_save_path):
         os.makedirs(args.model_save_path)
@@ -27,17 +27,17 @@ if __name__ == '__main__':
     if args.clean_tensorboard:
         if os.path.isdir("tensorboard"):
             shutil.rmtree("tensorboard")
-    configure("tensorboard/run" + time, flush_secs=5)
+    configure("tensorboard/run"+time, flush_secs=5)
 
     graphs = create_graphs.create(args)
-
+    
     # split datasets
     random.seed(123)
     shuffle(graphs)
     graphs_len = len(graphs)
     graphs_test = graphs[int(0.8 * graphs_len):]
-    graphs_train = graphs[0:int(0.8 * graphs_len)]
-    graphs_validate = graphs[0:int(0.2 * graphs_len)]
+    graphs_train = graphs[0:int(0.8*graphs_len)]
+    graphs_validate = graphs[0:int(0.2*graphs_len)]
 
     # if use pre-saved graphs
     # dir_input = "/dfs/scratch0/jiaxuany0/graphs/"
@@ -47,6 +47,7 @@ if __name__ == '__main__':
     # graphs_test = graphs[int(0.8 * graphs_len):]
     # graphs_train = graphs[0:int(0.8 * graphs_len)]
     # graphs_validate = graphs[int(0.2 * graphs_len):int(0.4 * graphs_len)]
+
 
     graph_validate_len = 0
     for graph in graphs_validate:
@@ -60,15 +61,17 @@ if __name__ == '__main__':
     graph_test_len /= len(graphs_test)
     print('graph_test_len', graph_test_len)
 
+
+
     args.max_num_node = max([graphs[i].number_of_nodes() for i in range(len(graphs))])
     max_num_edge = max([graphs[i].number_of_edges() for i in range(len(graphs))])
     min_num_edge = min([graphs[i].number_of_edges() for i in range(len(graphs))])
 
     # args.max_num_node = 2000
     # show graphs statistics
-    print('total graph num: {}, training set: {}'.format(len(graphs), len(graphs_train)))
+    print('total graph num: {}, training set: {}'.format(len(graphs),len(graphs_train)))
     print('max number node: {}'.format(args.max_num_node))
-    print('max/min number edge: {}; {}'.format(max_num_edge, min_num_edge))
+    print('max/min number edge: {}; {}'.format(max_num_edge,min_num_edge))
     print('max previous node: {}'.format(args.max_prev_node))
 
     # save ground truth graphs
@@ -84,10 +87,11 @@ if __name__ == '__main__':
     #         # print('node',node)
     #         if np.random.rand()>p:
     #             graph.remove_node(node)
-    # for edge in list(graph.edges()):
-    #     # print('edge',edge)
-    #     if np.random.rand()>p:
-    #         graph.remove_edge(edge[0],edge[1])
+        # for edge in list(graph.edges()):
+        #     # print('edge',edge)
+        #     if np.random.rand()>p:
+        #         graph.remove_edge(edge[0],edge[1])
+
 
     # ## dataset initialization
     # if 'nobfs' in args.note:
@@ -110,52 +114,46 @@ if __name__ == '__main__':
     elif 'barabasi_noise' in args.graph_type:
         dataset = Graph_sequence_sampler_pytorch_canonical(graphs_train, max_prev_node=args.max_prev_node)
     else:
-        dataset = Graph_sequence_sampler_pytorch(graphs_train, max_prev_node=args.max_prev_node,
-                                                 max_num_node=args.max_num_node)
+        dataset = Graph_sequence_sampler_pytorch(graphs_train, max_prev_node=args.max_prev_node, max_num_node=args.max_num_node)
 
     sampler = torch.utils.data.sampler.WeightedRandomSampler(
         [1.0 / len(dataset) for _ in range(len(dataset))],
         num_samples=args.batch_size * args.batch_ratio,
         replacement=True
     )
-    dataset_loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, num_workers=args.num_workers,
-                                                 sampler=sampler, collate_fn=custom_collate)
-
-    dataset_ = Graph_sequence_sampler_pytorch(graphs_test, max_prev_node=args.max_prev_node,
-                                              max_num_node=args.max_num_node)
+    dataset_loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, num_workers=args.num_workers, sampler=sampler, collate_fn= custom_collate)
+    
+    dataset_ = Graph_sequence_sampler_pytorch(graphs_test, max_prev_node=args.max_prev_node, max_num_node=args.max_num_node)
 
     sampler_ = torch.utils.data.sampler.WeightedRandomSampler(
         [1.0 / len(dataset_) for _ in range(len(dataset_))],
         num_samples=args.batch_size * args.batch_ratio,
         replacement=True
     )
-    dataset_test = torch.utils.data.DataLoader(dataset_, batch_size=args.batch_size, num_workers=args.num_workers,
-                                               sampler=sampler_, collate_fn=custom_collate)
+    dataset_test = torch.utils.data.DataLoader(dataset_, batch_size=args.batch_size, num_workers=args.num_workers, sampler=sampler_, collate_fn= custom_collate)
     ### model initialization
     ## Graph RNN VAE model
     # lstm = LSTM_plain(input_size=args.max_prev_node, embedding_size=args.embedding_size_lstm,
     #                   hidden_size=args.hidden_size, num_layers=args.num_layers).cuda()
-
+    for batch_data in dataset_loader:
+        for key, value in batch_data.items():
+            print(f"{key}: shape {value.shape}")
+        args.max_prev_node = batch_data["edge_seq"].shape[-1]  # Automatically set input size
+        break  # Only need to check once
+    args.max_prev_node=80
     # Initialize models
-    encoder = GraphEncoder(input_dim=80, hidden_dim=args.hidden_size_rnn,
-                           output_dim=args.hidden_size_rnn, num_layers=args.num_layers,
+    encoder = GraphEncoder(input_dim=80, hidden_dim=args.hidden_size_rnn, 
+                           output_dim=args.hidden_size_rnn, num_layers=args.num_layers, 
                            use_attention=False).cuda()
-
     rnn = GRU_plain_dec(input_size=args.max_prev_node, embedding_size=args.embedding_size_rnn,
                         hidden_size=args.hidden_size_rnn, num_layers=args.num_layers, has_input=True,
-                        has_output=True, output_size=args.hidden_size_rnn_output).cuda()
+                        has_output=True, output_size=80).cuda()
     output = GRU_plain_dec(input_size=1, embedding_size=args.embedding_size_rnn_output,
-                           hidden_size=args.hidden_size_rnn_output, num_layers=args.num_layers, has_input=True,
-                           has_output=True, output_size=1).cuda()
-    # Debugging: Print batch_data info in train_dec
-    for batch_data in dataset_loader:
-        print("Type of batch_data:", type(batch_data))
-        if isinstance(batch_data, dict):
-            print("batch_data keys:", batch_data.keys())
-            print("Sample content of batch_data:",
-                  {k: v.shape if hasattr(v, 'shape') else type(v) for k, v in batch_data.items()})
-        break  # Only print for the first batch
+                        hidden_size=args.hidden_size_rnn_output, num_layers=args.num_layers, has_input=True,
+                        has_output=True, output_size=1).cuda()    
+
     ### start training
+
     train_dec(args, dataset_loader, dataset_test, encoder, rnn, output)
 
     ### graph completion
@@ -163,3 +161,4 @@ if __name__ == '__main__':
 
     ### nll evaluation
     # train_nll(args, dataset_loader, dataset_loader, rnn, output, max_iter = 200, graph_validate_len=graph_validate_len,graph_test_len=graph_test_len)
+
