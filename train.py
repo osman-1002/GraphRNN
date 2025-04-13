@@ -27,6 +27,17 @@ from data import *
 from args import Args
 import create_graphs
 
+def approximate_community_loss(adj_matrix):
+    """
+    Approximates community structure using connected components.
+    """
+    G = nx.from_numpy_matrix(adj_matrix)
+    num_nodes = G.number_of_nodes()
+    components = list(nx.connected_components(G))
+    num_components = len(components)
+    community_score = num_components / num_nodes
+    return abs(community_score - 0.25)  # Encourage moderate fragmentation
+
 def compute_loss(output_seq, target_seq):
     # Assuming both output_seq and target_seq have shape [batch_size, seq_len, feature_dim]
     # Flatten both sequences to [batch_size * seq_len, feature_dim]
@@ -302,8 +313,8 @@ def test_rnn_dec_epoch(epoch, dataset_test, args, encoder, rnn, output, test_bat
         graph_embedding = encoder(x, edge_index, batch).float()
         
         # Normalize graph embedding
-        graph_embedding = (graph_embedding - graph_embedding.mean(dim=1, keepdim=True)) / (graph_embedding.std(dim=1, keepdim=True) + 1e-8)
-        hidden = rnn.init_hidden(graph_embedding.repeat(1, batch_size, 1))  
+        #graph_embedding = (graph_embedding - graph_embedding.mean(dim=1, keepdim=True)) / (graph_embedding.std(dim=1, keepdim=True) + 1e-8)
+        hidden = rnn.init_hidden(graph_embedding.repeat(1, batch_size, 1) + 0.1 * torch.randn_like(graph_embedding))
         # Add output projection layer to ensure output dimensions match target
         for batch_data in dataset_test:
             # Move batch data to GPU
@@ -312,16 +323,12 @@ def test_rnn_dec_epoch(epoch, dataset_test, args, encoder, rnn, output, test_bat
             batch = batch_data['batch'].to(device)
             edge_seq = batch_data['edge_seq'].to(device)
             
-            # Normalize inputs
-            x = (x - x.mean(dim=0, keepdim=True)) / (x.std(dim=0, keepdim=True) + 1e-8)
+           
             edge_seq = edge_seq.float()
-            edge_seq = (edge_seq - edge_seq.mean(dim=0, keepdim=True)) / (edge_seq.std(dim=0, keepdim=True) + 1e-8)
             
             # Forward pass through encoder to get graph embeddings
             graph_embedding = encoder(x, edge_index, batch).float()
             
-            # Normalize graph embedding
-            graph_embedding = (graph_embedding - graph_embedding.mean(dim=1, keepdim=True)) / (graph_embedding.std(dim=1, keepdim=True) + 1e-8)
             
             # Ensure edge_seq has correct dtype and dimensions
             edge_seq = edge_seq.float()
@@ -329,10 +336,12 @@ def test_rnn_dec_epoch(epoch, dataset_test, args, encoder, rnn, output, test_bat
 
             # Compute actual lengths of edge sequences
             edge_lengths = batch_data['len']
+            sorted_indices = torch.argsort(edge_lengths, descending=True)
+            edge_seq = edge_seq[sorted_indices]
+            edge_lengths = edge_lengths[sorted_indices]
 
             
             # Pack the sequence before feeding into RNN
-            #packed_edges = pack_padded_sequence(edge_seq, edge_lengths.cuda(), batch_first=True, enforce_sorted=False)
             packed_x = pack_padded_sequence(x, edge_lengths.cpu(), batch_first=True, enforce_sorted=False)
             # RNN forward pass
             output_seq, hidden = rnn(packed_x, graph_embedding.unsqueeze(0), hidden)
@@ -340,19 +349,14 @@ def test_rnn_dec_epoch(epoch, dataset_test, args, encoder, rnn, output, test_bat
                 # Unpack sequence
                 output_seq, _ = pad_packed_sequence(output_seq, batch_first=True)
 
-            
-            #output_seq = output_projection(output_seq)  # Shape: [32, 55, 2]
+            output_seq = torch.sigmoid(output_seq)
             # Detach hidden state to prevent backprop through old computation graphs
             hidden = hidden.detach()
             for i in range(test_batch_size):
                 print("Output sequence shape:", output_seq.shape)
 
-                # Dynamically determine the number of nodes
-                num_nodes = output_seq.shape[1]  # Assuming seq_len corresponds to num_nodes
-
-                # Apply a dynamic projection to match adjacency matrix shape
-                output_projection = nn.Linear(output_seq.shape[-1], num_nodes).cuda()
-                adj_output = output_projection(output_seq[i])  # Map hidden_dim to num_nodes
+                adj_output = torch.tanh(output_seq[i])  # Squashes values into [-1, 1] range
+                adj_output = (adj_output + 1) / 2  # Rescale to [0,1]
                 adj_output = adj_output.cpu().detach().numpy()  # Convert to NumPy
 
                 # Decode adjacency matrix
@@ -362,58 +366,6 @@ def test_rnn_dec_epoch(epoch, dataset_test, args, encoder, rnn, output, test_bat
                 G_pred = get_graph(adj_pred)  # Convert to a graph
                 print("Generated Graph Info:", nx.info(G_pred))
                 G_pred_list.append(G_pred)
-        
-        # # Initialize hidden state once per epoch
-        # hidden = rnn.init_hidden(args.batch_size, device='cuda')
-        # # Add output projection layer to ensure output dimensions match target
-        # output_projection = nn.Linear(128, 2).cuda()  # Mapping from 128 features to 2 features
-        # for batch_data in dataset_test:
-        #     # Move batch data to GPU
-        #     x = batch_data['x'].to(device)
-        #     edge_index = batch_data['edge_index'].to(device)
-        #     batch = batch_data['batch'].to(device)
-        #     edge_seq = batch_data['edge_seq'].to(device)
-            
-        #     # Normalize inputs
-        #     x = (x - x.mean(dim=0, keepdim=True)) / (x.std(dim=0, keepdim=True) + 1e-8)
-        #     edge_seq = edge_seq.float()
-        #     edge_seq = (edge_seq - edge_seq.mean(dim=0, keepdim=True)) / (edge_seq.std(dim=0, keepdim=True) + 1e-8)
-            
-        #     # Forward pass through encoder to get graph embeddings
-        #     graph_embedding = encoder(x, edge_index, batch).float()
-            
-        #     # Normalize graph embedding
-        #     graph_embedding = (graph_embedding - graph_embedding.mean(dim=1, keepdim=True)) / (graph_embedding.std(dim=1, keepdim=True) + 1e-8)
-            
-        #     # Ensure edge_seq has correct dtype and dimensions
-        #     edge_seq = edge_seq.float()
-
-        #     output_seq, hidden = rnn(edge_seq, graph_embedding.unsqueeze(0), hidden)
-            
-
-
-        #     # Detach hidden state to prevent backprop through old computation graphs
-        #     hidden = hidden.detach()
-        #     for i in range(test_batch_size):
-        #         print("Output sequence shape:", output_seq.shape)
-
-        #         # Dynamically determine the number of nodes
-        #         num_nodes = output_seq.shape[1]  # Assuming seq_len corresponds to num_nodes
-
-        #         # Apply a dynamic projection to match adjacency matrix shape
-        #         output_projection = nn.Linear(output_seq.shape[-1], num_nodes).cuda()
-        #         adj_output = output_projection(output_seq[i])  # Map hidden_dim to num_nodes
-        #         adj_output = adj_output.cpu().detach().numpy()  # Convert to NumPy
-
-        #         # Decode adjacency matrix
-        #         adj_pred = dec_decode_adj(adj_output)
-
-        #         print("Adjacency Matrix Shape:", adj_pred.shape)
-        #         G_pred = get_graph(adj_pred)  # Convert to a graph
-        #         print("Generated Graph Info:", nx.info(G_pred))
-        #         G_pred_list.append(G_pred)
-                     
-       
 
     return G_pred_list
 
@@ -728,7 +680,7 @@ def train_rnn_forward_epoch(epoch, args, rnn, output, data_loader):
         output_y = pad_packed_sequence(output_y,batch_first=True)[0]
         # use cross entropy loss
         loss = binary_cross_entropy_weight(y_pred, output_y)
-
+        
 
         if epoch % args.epochs_log==0 and batch_idx==0: # only output first batch's statistics
             print('Epoch: {}/{}, train loss: {:.6f}, graph type: {}, num_layer: {}, hidden: {}'.format(
@@ -884,11 +836,8 @@ def train_dec(args, dataset_train, dataset_test, encoder, rnn, output):
         # Forward pass through encoder to get graph embeddings
         graph_embedding = encoder(x, edge_index, batch).float()
         
-        # Normalize graph embedding
-        graph_embedding = (graph_embedding - graph_embedding.mean(dim=1, keepdim=True)) / (graph_embedding.std(dim=1, keepdim=True) + 1e-8)
-        hidden = rnn.init_hidden(graph_embedding.repeat(1, batch_size, 1))  
-        # Add output projection layer to ensure output dimensions match target
-        
+        hidden = rnn.init_hidden(graph_embedding.repeat(1, batch_size, 1) + 0.1 * torch.randn_like(graph_embedding))
+                
         for batch_data in dataset_train:
             # Move batch data to GPU
             x = batch_data['x'].to(device)
@@ -897,16 +846,10 @@ def train_dec(args, dataset_train, dataset_test, encoder, rnn, output):
             batch = batch_data['batch'].to(device)
             edge_seq = batch_data['edge_seq'].to(device)
             
-            # Normalize inputs
-            x = (x - x.mean(dim=0, keepdim=True)) / (x.std(dim=0, keepdim=True) + 1e-8)
             edge_seq = edge_seq.float()
-            edge_seq = (edge_seq - edge_seq.mean(dim=0, keepdim=True)) / (edge_seq.std(dim=0, keepdim=True) + 1e-8)
             
             # Forward pass through encoder to get graph embeddings
             graph_embedding = encoder(x, edge_index, batch).float()
-            
-            # Normalize graph embedding
-            graph_embedding = (graph_embedding - graph_embedding.mean(dim=1, keepdim=True)) / (graph_embedding.std(dim=1, keepdim=True) + 1e-8)
             
             # Ensure edge_seq has correct dtype and dimensions
             edge_seq = edge_seq.float()
@@ -915,8 +858,10 @@ def train_dec(args, dataset_train, dataset_test, encoder, rnn, output):
             # Compute actual lengths of edge sequences
             edge_lengths = batch_data['len']
 
+            sorted_indices = torch.argsort(edge_lengths, descending=True)
+            edge_seq = edge_seq[sorted_indices]
+            edge_lengths = edge_lengths[sorted_indices]
             # Pack the sequence before feeding into RNN
-            #packed_edges = pack_padded_sequence(edge_seq, edge_lengths.cuda(), batch_first=True, enforce_sorted=False)
             packed_x = pack_padded_sequence(x, edge_lengths.cpu(), batch_first=True, enforce_sorted=False)
             # RNN forward pass
             output_seq, hidden = rnn(packed_x, graph_embedding.unsqueeze(0), hidden)
@@ -925,12 +870,16 @@ def train_dec(args, dataset_train, dataset_test, encoder, rnn, output):
                 output_seq, _ = pad_packed_sequence(output_seq, batch_first=True)
 
             output_seq = torch.sigmoid(output_seq)
-            # Ensure target_seq matches output_seq shape
             target_seq = y
-            #target_seq = edge_seq[:, :output_seq.shape[1], :]  # Match sequence length
-            loss = binary_cross_entropy_weight(output_seq, target_seq)
-            #loss = F.binary_cross_entropy_with_logits(output_seq, target_seq)
-            # Backpropagation
+            bce_loss = binary_cross_entropy_weight(output_seq, target_seq)
+
+            # Compute community loss from predicted adjacency
+            adj_output = output_seq[0].cpu().detach().numpy()
+            adj_pred = dec_decode_adj(adj_output)
+            comm_loss = approximate_community_loss(adj_pred)
+
+            λ = 0.1  # Regularization strength
+            loss = bce_loss + λ * comm_loss            # Backpropagation
             optimizer_encoder.zero_grad()
             optimizer_rnn.zero_grad()
             optimizer_output.zero_grad()

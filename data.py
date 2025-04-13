@@ -232,39 +232,99 @@ def decode_adj(adj_output):
 
 import numpy as np
 
-def dec_decode_adj(output_seq, threshold=0.5, max_nodes=64):
-    """
-    Convert an output sequence into an adjacency matrix.
+# def dec_decode_adj(output_seq, threshold=0.5, max_nodes=64):
+#     """
+#     Convert an output sequence into an adjacency matrix.
 
-    Args:
-        output_seq (numpy.ndarray): Shape (num_nodes, num_nodes) with edge scores.
-        threshold (float): Threshold for converting scores into binary values.
-        max_nodes (int): Maximum allowed number of nodes.
+#     Args:
+#         output_seq (numpy.ndarray): Shape (num_nodes, num_nodes) with edge scores.
+#         threshold (float): Threshold for converting scores into binary values.
+#         max_nodes (int): Maximum allowed number of nodes.
 
-    Returns:
-        numpy.ndarray: Binary adjacency matrix of shape (max_nodes, max_nodes).
-    """
-    num_nodes = min(output_seq.shape[0], max_nodes)
+#     Returns:
+#         numpy.ndarray: Binary adjacency matrix of shape (max_nodes, max_nodes).
+#     """
+#     num_nodes = min(output_seq.shape[0], max_nodes)
     
-    # Ensure output_seq is at most (max_nodes, max_nodes)
-    output_seq = output_seq[:num_nodes, :num_nodes]
+#     # Ensure output_seq is at most (max_nodes, max_nodes)
+#     output_seq = output_seq[:num_nodes, :num_nodes]
 
-    # Initialize adjacency matrix with the same shape as output_seq
-    adj_matrix = np.zeros_like(output_seq, dtype=int)
+#     # Initialize adjacency matrix with the same shape as output_seq
+#     adj_matrix = np.zeros_like(output_seq, dtype=int)
 
-    # Apply thresholding to construct adjacency matrix
-    adj_matrix[output_seq > threshold] = 1
+#     # Apply thresholding to construct adjacency matrix
+#     threshold = np.percentile(output_seq, 85)  # Adjust percentile for denser/sparser graphs
+#     adj_matrix[output_seq > threshold] = 1
 
-    # Ensure symmetry
-    adj_matrix = np.triu(adj_matrix, 1)  # Upper triangular part
-    adj_matrix = adj_matrix + adj_matrix.T  # Reflect to lower triangle
+#     # Ensure symmetry
+#     adj_matrix = np.triu(adj_matrix, 1)  # Upper triangular part
+#     adj_matrix = adj_matrix + adj_matrix.T  # Reflect to lower triangle
 
-    # Remove self-loops
-    np.fill_diagonal(adj_matrix, 0)
+#     # Remove self-loops
+#     np.fill_diagonal(adj_matrix, 0)
 
-    return adj_matrix
+#     return adj_matrix
 
+# def dec_decode_adj(adj_output, percentile=85):
+#     """
+#     Decode a sequential edge score output into a symmetric binary adjacency matrix,
+#     similar to decode_adj but includes thresholding based on edge scores.
 
+#     Args:
+#         adj_output (numpy.ndarray): Shape (n-1, m) — edge scores for previous nodes.
+#         percentile (float): Percentile threshold to binarize scores.
+
+#     Returns:
+#         numpy.ndarray: Binary symmetric adjacency matrix of shape (n, n).
+#     """
+#     max_prev_node = adj_output.shape[1]
+#     n_nodes = adj_output.shape[0] + 1
+
+#     # Create zero matrix for intermediate lower triangle
+#     adj = np.zeros((adj_output.shape[0], adj_output.shape[0]))
+
+#     for i in range(adj_output.shape[0]):
+#         input_start = max(0, i - max_prev_node + 1)
+#         input_end = i + 1
+#         output_start = max_prev_node + max(0, i - max_prev_node + 1) - (i + 1)
+#         output_end = max_prev_node
+#         edge_scores = adj_output[i, ::-1][output_start:output_end]
+        
+#         # Apply thresholding
+#         thresh = np.percentile(edge_scores, percentile)
+#         adj[i, input_start:input_end] = (edge_scores > thresh).astype(int)
+
+#     # Convert lower-triangular to full symmetric adjacency
+#     adj_full = np.zeros((n_nodes, n_nodes), dtype=int)
+#     adj_full[1:n_nodes, 0:n_nodes-1] = np.tril(adj, 0)
+#     adj_full = adj_full + adj_full.T
+
+#     # Remove self-loops
+#     np.fill_diagonal(adj_full, 0)
+
+#     return adj_full
+
+def dec_decode_adj(adj_output, k=3):
+    max_prev_node = adj_output.shape[1]
+    n_nodes = adj_output.shape[0] + 1
+
+    adj = np.zeros((adj_output.shape[0], adj_output.shape[0]))
+
+    for i in range(adj_output.shape[0]):
+        input_start = max(0, i - max_prev_node + 1)
+        input_end = i + 1
+        output_start = max_prev_node + input_start - input_end
+        output_end = max_prev_node
+        edge_scores = adj_output[i, ::-1][output_start:output_end]
+
+        top_k_indices = np.argsort(edge_scores)[-k:]
+        adj[i, input_start:input_end][top_k_indices] = 1
+
+    adj_full = np.zeros((n_nodes, n_nodes), dtype=int)
+    adj_full[1:n_nodes, 0:n_nodes-1] = np.tril(adj, 0)
+    adj_full = adj_full + adj_full.T
+    np.fill_diagonal(adj_full, 0)
+    return adj_full
 
 def encode_adj_flexible(adj):
     '''

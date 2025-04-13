@@ -6,13 +6,15 @@ class Args():
         self.clean_tensorboard = False
         ### Which CUDA GPU device is used for training
         self.cuda = 0
-
+        self.input_dim = 10  # Adjust based on your node features
+        self.hidden_dim = 32  # Adjust as needed
+        self.use_attention = False  # Set True to use GAT instead of GCN
         ### Which GraphRNN model variant is used.
         # The simple version of Graph RNN
         # self.note = 'GraphRNN_MLP'
         # The dependent Bernoulli sequence version of GraphRNN
         #self.note = 'GraphRNN_RNN'
-        self.note = 'GraphRNN_ATT'
+        self.note = 'GraphRNN_DEC'
         ## for comparison, removing the BFS compoenent
         # self.note = 'GraphRNN_MLP_nobfs'
         # self.note = 'GraphRNN_RNN_nobfs'
@@ -27,7 +29,7 @@ class Args():
         #self.graph_type = 'grid_small'
         # self.graph_type = 'ladder_small'
 
-        # self.graph_type = 'enzymes'
+        #self.graph_type = 'enzymes'
         # self.graph_type = 'enzymes_small'
         # self.graph_type = 'barabasi'
         #self.graph_type = 'barabasi_small'
@@ -64,15 +66,14 @@ class Args():
         ### training config
         self.num_workers = 4 # num workers to load data, default 4
         self.batch_ratio = 32 # how many batches of samples per epoch, default 32, e.g., 1 epoch = 32 batches
-        self.epochs = 3 # now one epoch means self.batch_ratio x batch_size
-        self.epochs_test_start = 3
-        self.epochs_test = 3
-        self.epochs_log = 3
-        self.epochs_save = 3
+        self.epochs = 10 # now one epoch means self.batch_ratio x batch_size
+        self.epochs_test_start = 10
+        self.epochs_test = 10
+        self.epochs_save = 10
 
-        self.lr = 0.003
+        self.lr = 0.00005
         self.milestones = [400, 1000]
-        self.lr_rate = 0.3
+        self.lr_rate = 0.03
 
         self.sample_time = 2 # sample time in each time step, when validating
 

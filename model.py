@@ -546,8 +546,6 @@ class GRU_plain_dec(nn.Module):
         return hidden  # Shape: (num_layers, batch_size, hidden_size)
 
     def forward(self, edge_seq, graph_embedding, hidden=None):
-        edge_embedding = nn.Linear(2, 64).cuda()  # Expand 2D edge features to embedding size
-        # edge_seq = edge_embedding(edge_seq)  # Transform shape (batch_size, seq_len, 2) → (batch_size, seq_len, embedding_size_rnn)
         # Unpack the sequence
         if isinstance(edge_seq, PackedSequence):
             edge_seq, _ = pad_packed_sequence(edge_seq, batch_first=True)
@@ -566,16 +564,11 @@ class GRU_plain_dec(nn.Module):
         # Reshape back to (batch_size, seq_len, embedding_size)
         edge_seq = edge_seq.view(batch_size, seq_len, -1)  # Shape: (32, 327, embedding_size)
 
-        # # Expand graph embedding
-        # if graph_embedding.dim() == 2:
-        #     graph_embedding = graph_embedding.unsqueeze(1).expand(-1, seq_len, -1)
-
         # Concatenate input with graph embedding
         graph_embedding = graph_embedding.squeeze(0)  # Ensure correct shape
         graph_embedding = graph_embedding.unsqueeze(1).expand(edge_seq.shape[0], edge_seq.shape[1], -1)
         
         input_seq = torch.cat([edge_seq, graph_embedding], dim=-1)
-        #input_seq = torch.cat([edge_seq, graph_embedding], dim=-1)  # Shape: (32, 327, embedding_size + hidden_size)
         # print(f"input_seq shape: {input_seq.shape}")
         # print(hidden.shape)
         # RNN forward pass
@@ -585,7 +578,6 @@ class GRU_plain_dec(nn.Module):
         if self.has_output:
             # print(f"Output seq shape before Linear layer: {output_seq.shape}")  
             # print(f"Expected Linear layer input features: {self.output[0].in_features}")  
-
 
             batch_size, seq_len, hidden_dim = output_seq.shape  # (32, 259, 128)
     

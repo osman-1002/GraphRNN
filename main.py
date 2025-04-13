@@ -131,6 +131,7 @@ if __name__ == '__main__':
         replacement=True
     )
     dataset_test = torch.utils.data.DataLoader(dataset_, batch_size=args.batch_size, num_workers=args.num_workers, sampler=sampler_, collate_fn= custom_collate)
+    #dataset_test = dataset_loader
     ### model initialization
     ## Graph RNN VAE model
     # lstm = LSTM_plain(input_size=args.max_prev_node, embedding_size=args.embedding_size_lstm,
