@@ -139,9 +139,7 @@ if __name__ == '__main__':
     for batch_data in dataset_loader:
         for key, value in batch_data.items():
             print(f"{key}: shape {value.shape}")
-        args.max_prev_node = batch_data["edge_seq"].shape[-1]  # Automatically set input size
         break  # Only need to check once
-    args.max_prev_node=80
     # Initialize models
     encoder = GraphEncoder(input_dim=80, hidden_dim=args.hidden_size_rnn, 
                            output_dim=args.hidden_size_rnn, num_layers=args.num_layers, 
@@ -163,3 +161,10 @@ if __name__ == '__main__':
     ### nll evaluation
     # train_nll(args, dataset_loader, dataset_loader, rnn, output, max_iter = 200, graph_validate_len=graph_validate_len,graph_test_len=graph_test_len)
 
+    # elif 'GraphRNN_RNN' in args.note:
+    #     rnn = GRU_plain(input_size=args.max_prev_node, embedding_size=args.embedding_size_rnn,
+    #                     hidden_size=args.hidden_size_rnn, num_layers=args.num_layers, has_input=True,
+    #                     has_output=True, output_size=args.hidden_size_rnn_output).cuda()
+    #     output = GRU_plain(input_size=1, embedding_size=args.embedding_size_rnn_output,
+    #                        hidden_size=args.hidden_size_rnn_output, num_layers=args.num_layers, has_input=True,
+    #                        has_output=True, output_size=1).cuda()

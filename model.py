@@ -72,6 +72,31 @@ def binary_cross_entropy_weight(y_pred, y, has_weight=False, weight_length=1, we
     
     return loss
 
+def masked_binary_cross_entropy(outputs, targets, lengths):
+    """
+    outputs: (B, T, F) — predicted
+    targets: (B, T, F) — ground truth
+    lengths: (B,) — actual lengths per sequence
+    """
+    B, T, Fe = outputs.shape
+
+    # Create mask (B, T) — valid positions = 1, padding = 0
+    mask = torch.zeros((B, T), device=outputs.device)
+    for i, length in enumerate(lengths):
+        mask[i, :length] = 1
+
+    # Expand mask to match (B, T, F)
+    mask = mask.unsqueeze(-1).expand_as(outputs)
+
+    # Compute element-wise BCE loss without reduction
+    loss = F.binary_cross_entropy(outputs, targets, reduction='none')
+
+    # Apply mask and average only over valid elements
+    loss = loss * mask
+    loss = loss.sum() / mask.sum()
+
+    return loss
+
 def sample_tensor(y,sample=True, thresh=0.5):
     # do sampling
     if sample:
@@ -132,41 +157,55 @@ def gumbel_sigmoid(logits, temperature):
 # print(x)
 # print(y)
 
-def sample_sigmoid(y, sample, thresh=0.5, sample_time=2):
-    '''
-        do sampling over unnormalized score
-    :param y: input
-    :param sample: Bool
-    :param thresh: if not sample, the threshold
-    :param sampe_time: how many times do we sample, if =1, do single sample
-    :return: sampled result
-    '''
-    if isinstance(y, tuple):
-        y = y[0]  # Extract the first element if y is a tuple
-    # do sigmoid first
-    y = F.sigmoid(y)
-    # do sampling
-    if sample:
-        if sample_time>1:
-            y_result = Variable(torch.rand(y.size(0),y.size(1),y.size(2))).cuda()
-            # loop over all batches
-            for i in range(y_result.size(0)):
-                # do 'multi_sample' times sampling
-                for j in range(sample_time):
-                    y_thresh = Variable(torch.rand(y.size(1), y.size(2))).cuda()
-                    y_result[i] = torch.gt(y[i], y_thresh).float()
-                    if (torch.sum(y_result[i]).data>0).any():
-                        break
-                    # else:
-                    #     print('all zero',j)
-        else:
-            y_thresh = Variable(torch.rand(y.size(0),y.size(1),y.size(2))).cuda()
-            y_result = torch.gt(y,y_thresh).float()
-    # do max likelihood based on some threshold
+def sample_sigmoid(y, sample=True, sample_time=1):
+    if len(y.size()) == 2:
+        y_thresh = torch.rand_like(y)
+    elif len(y.size()) == 3:
+        y_thresh = torch.rand(y.size(0), y.size(1), y.size(2)).to(y.device)
     else:
-        y_thresh = Variable(torch.ones(y.size(0), y.size(1), y.size(2))*thresh).cuda()
-        y_result = torch.gt(y, y_thresh).float()
-    return y_result
+        raise ValueError(f"Unsupported tensor shape for sampling: {y.shape}")
+
+    if sample:
+        y_sampled = (y > y_thresh).float()
+        return y_sampled
+    else:
+        return (y > 0.5).float()
+
+# def sample_sigmoid(y, sample, thresh=0.5, sample_time=2):
+#     '''
+#         do sampling over unnormalized score
+#     :param y: input
+#     :param sample: Bool
+#     :param thresh: if not sample, the threshold
+#     :param sampe_time: how many times do we sample, if =1, do single sample
+#     :return: sampled result
+#     '''
+#     if isinstance(y, tuple):
+#         y = y[0]  # Extract the first element if y is a tuple
+#     # do sigmoid first
+#     y = F.sigmoid(y)
+#     # do sampling
+#     if sample:
+#         if sample_time>1:
+#             y_result = Variable(torch.rand(y.size(0),y.size(1),y.size(2))).cuda()
+#             # loop over all batches
+#             for i in range(y_result.size(0)):
+#                 # do 'multi_sample' times sampling
+#                 for j in range(sample_time):
+#                     y_thresh = Variable(torch.rand(y.size(1), y.size(2))).cuda()
+#                     y_result[i] = torch.gt(y[i], y_thresh).float()
+#                     if (torch.sum(y_result[i]).data>0).any():
+#                         break
+#                     # else:
+#                     #     print('all zero',j)
+#         else:
+#             y_thresh = Variable(torch.rand(y.size(0),y.size(1),y.size(2))).cuda()
+#             y_result = torch.gt(y,y_thresh).float()
+#     # do max likelihood based on some threshold
+#     else:
+#         y_thresh = Variable(torch.ones(y.size(0), y.size(1), y.size(2))*thresh).cuda()
+#         y_result = torch.gt(y, y_thresh).float()
+#     return y_result
 
 def sample_sigmoid_attention(y, sample, thresh=0.5, sample_time=2):
     '''
@@ -431,7 +470,7 @@ class LSTM_plain(nn.Module):
         return output_raw
 
 # plain GRU model
-class GRU_plain(nn.Module):
+class aGRU_plain(nn.Module):
     def __init__(self, input_size, embedding_size, hidden_size, num_layers, has_input=True, has_output=False, output_size=None):
         super(GRU_plain, self).__init__()
         self.num_layers = num_layers
@@ -489,7 +528,84 @@ class GRU_plain(nn.Module):
             output_raw = self.output(output_raw)
         # return hidden state at each time step
         return output_raw
+class OutputModule(nn.Module):
+    def __init__(self, hidden_size, embedding_size, output_size):
+        super(OutputModule, self).__init__()
+        self.output = nn.Sequential(
+            nn.Linear(hidden_size, embedding_size),
+            nn.ReLU(),
+            nn.Linear(embedding_size, output_size)
+        )
 
+    def forward(self, x):
+        return self.output(x)
+    
+class GRU_plain(nn.Module):
+    def __init__(self, input_size, embedding_size, hidden_size, num_layers, has_input=True, has_output=False, output_size=None):
+        super(GRU_plain, self).__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.has_input = has_input
+        self.has_output = has_output
+
+        if has_input:
+            self.input = nn.Linear(input_size, embedding_size)
+            self.rnn = nn.GRU(input_size=embedding_size, hidden_size=hidden_size, num_layers=num_layers,
+                              batch_first=True)
+        else:
+            self.rnn = nn.GRU(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
+        if has_output:
+            self.output = nn.Sequential(
+                nn.Linear(hidden_size, embedding_size),
+                nn.ReLU(),
+                nn.Linear(embedding_size, output_size)
+            )
+
+        self.relu = nn.ReLU()
+        # initialize
+        self.hidden = None  # need initialize before forward run
+
+        for name, param in self.rnn.named_parameters():
+            if 'bias' in name:
+                nn.init.constant(param, 0.25)
+            elif 'weight' in name:
+                nn.init.xavier_uniform(param,gain=nn.init.calculate_gain('sigmoid'))
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                m.weight.data = init.xavier_uniform(m.weight.data, gain=nn.init.calculate_gain('relu'))
+
+    def init_hidden(self, batch_size):
+        return Variable(torch.zeros(self.num_layers, batch_size, self.hidden_size)).cuda()
+
+    def forward(self, input_raw, pack=False, input_len=None):
+        if self.has_input:
+            input = self.input(input_raw)
+            input = self.relu(input)
+        else:
+            input = input_raw
+        if pack:
+            input = pack_padded_sequence(input, input_len, batch_first=True)
+        output_raw, self.hidden = self.rnn(input, self.hidden)
+        if pack:
+            output_raw = pad_packed_sequence(output_raw, batch_first=True)[0]
+        if self.has_output:
+            output_raw = self.output(output_raw)
+        # return hidden state at each time step
+        return output_raw
+    
+    
+class OutputModule(nn.Module):
+    def __init__(self, hidden_size, embedding_size, output_size):
+        super(OutputModule, self).__init__()
+        self.output = nn.Sequential(
+            nn.Linear(hidden_size, embedding_size),
+            nn.ReLU(),
+            nn.Linear(embedding_size, output_size)
+        )
+
+    def forward(self, x):
+        return self.output(x)
+    
 class GRU_plain_dec(nn.Module):
     def __init__(self, input_size, embedding_size, hidden_size, num_layers, output_size, has_input=True, has_output=True):
         super(GRU_plain_dec, self).__init__()
@@ -501,6 +617,8 @@ class GRU_plain_dec(nn.Module):
         # Input projection
         if has_input:
             self.input = nn.Linear(input_size, embedding_size)
+            self.input_raw = nn.Linear(2, embedding_size)
+            self.input_pred = nn.Linear(output_size, embedding_size)
             self.relu = nn.ReLU()
         
         # GRU
@@ -553,7 +671,7 @@ class GRU_plain_dec(nn.Module):
         # print(f"Edge seq shape before projection: {edge_seq.shape}")  # Debugging print
         # print(f"Expected input size: {self.input.in_features}")  # Debugging print
         # Ensure input size matches expected feature dimension
-        assert feat_dim == self.input.in_features, f"Expected {self.input.in_features}, got {feat_dim}"
+        #assert feat_dim == self.input.in_features, f"Expected {self.input.in_features}, got {feat_dim}"
 
         # Reshape to (batch_size * seq_len, input_size) before applying Linear layer
         edge_seq = edge_seq.view(-1, feat_dim)  # Shape: (32*327, 2) -> (10464, 2)
@@ -582,14 +700,12 @@ class GRU_plain_dec(nn.Module):
             batch_size, seq_len, hidden_dim = output_seq.shape  # (32, 259, 128)
     
             # Flatten output_seq to (batch_size * seq_len, hidden_dim) before passing to Linear
-            output_seq = output_seq.reshape(-1, hidden_dim)  # Shape: (32*259, 128)
-            # print(f"Output seq shape after flattening: {output_seq.shape}")
+            output_seq = output_seq.reshape(-1, hidden_dim) 
             # Apply output projection layers
-            assert output_seq.shape[-1] == 128, f"Expected last dim 128, got {output_seq.shape[-1]}"
             output_seq = self.output(output_seq)
             
             # Reshape back to original sequence format
-            output_seq = output_seq.reshape(batch_size, seq_len, -1)  # Shape: (32, 259, output_size) 
+            output_seq = output_seq.reshape(batch_size, seq_len, -1)  
 
         return output_seq, hidden.detach()
 

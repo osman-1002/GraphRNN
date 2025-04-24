@@ -590,7 +590,7 @@ if __name__ == '__main__':
     for i in range(0, 160, 16):
         draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/test/community_DEC_' + str(i))
     
-    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community4_4_128_pred_10_3.dat')
+    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community4_4_128_pred_3_1.dat')
 
     for i in range(0, 160, 16):
-        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/pred/community_DEC_10_3_' + str(i))
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/pred/n_community_DEC_3_1_' + str(i))

@@ -1,17 +1,17 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
+from torch_geometric.nn import GCNConv, GATConv, global_mean_pool, global_add_pool
 
 class GraphEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers=2, use_attention=False):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers=2, use_attention=True):
         super(GraphEncoder, self).__init__()
         self.use_attention = use_attention
 
         if use_attention:
             self.convs = nn.ModuleList([GATConv(input_dim if i == 0 else hidden_dim, hidden_dim) for i in range(num_layers)])
         else:
-            self.convs = nn.ModuleList([GCNConv(input_dim if i == 0 else hidden_dim, hidden_dim) for i in range(num_layers)])
+            self.convs = nn.ModuleList([GATConv(input_dim if i == 0 else hidden_dim, hidden_dim) for i in range(num_layers)])
 
         self.fc = nn.Linear(hidden_dim, output_dim)  # Project to match GRU_plain hidden size
 

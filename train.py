@@ -26,7 +26,7 @@ from model import *
 from data import *
 from args import Args
 import create_graphs
-
+import random
 def approximate_community_loss(adj_matrix):
     """
     Approximates community structure using connected components.
@@ -287,91 +287,270 @@ def atest_rnn_dec_epoch(epoch, graphs_test, args, encoder, rnn, output, test_bat
     return G_pred_list
 
 
-def test_rnn_dec_epoch(epoch, dataset_test, args, encoder, rnn, output, test_batch_size=16):
-    # Set models to evaluation mode
+def btest_dec_epoch(epoch, dataset_test, args, encoder, rnn, output, test_batch_size=16):
     encoder.eval()
     rnn.eval()
     output.eval()
     
-    # Device configuration
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    
-    G_pred_list = []  # List to store generated graphs
-    
-    with torch.no_grad():  # Disable gradient computation for efficiency
+    G_pred_list = []
 
-        # Initialize the first batch to extract input dimensions for hidden state
-        first_batch = next(iter(dataset_test))
-
-        # Move batch data to GPU
-        x = first_batch['x'].to(device)
-        edge_index = first_batch['edge_index'].to(device)
-        batch = first_batch['batch'].to(device)
-        batch_size = dataset_test.batch_size  # Ensure correct batch size
-        # Initialize hidden state once per epoch
-        # Forward pass through encoder to get graph embeddings
-        graph_embedding = encoder(x, edge_index, batch).float()
-        
-        # Normalize graph embedding
-        #graph_embedding = (graph_embedding - graph_embedding.mean(dim=1, keepdim=True)) / (graph_embedding.std(dim=1, keepdim=True) + 1e-8)
-        hidden = rnn.init_hidden(graph_embedding.repeat(1, batch_size, 1) + 0.1 * torch.randn_like(graph_embedding))
-        # Add output projection layer to ensure output dimensions match target
+    with torch.no_grad():
         for batch_data in dataset_test:
             # Move batch data to GPU
             x = batch_data['x'].to(device)
             edge_index = batch_data['edge_index'].to(device)
             batch = batch_data['batch'].to(device)
-            edge_seq = batch_data['edge_seq'].to(device)
-            
-           
-            edge_seq = edge_seq.float()
-            
-            # Forward pass through encoder to get graph embeddings
-            graph_embedding = encoder(x, edge_index, batch).float()
-            
-            
-            # Ensure edge_seq has correct dtype and dimensions
-            edge_seq = edge_seq.float()
-            
-
-            # Compute actual lengths of edge sequences
+            edge_seq = batch_data['edge_seq'].to(device).float()
             edge_lengths = batch_data['len']
-            sorted_indices = torch.argsort(edge_lengths, descending=True)
-            edge_seq = edge_seq[sorted_indices]
-            edge_lengths = edge_lengths[sorted_indices]
 
-            
-            # Pack the sequence before feeding into RNN
-            packed_x = pack_padded_sequence(x, edge_lengths.cpu(), batch_first=True, enforce_sorted=False)
-            # RNN forward pass
-            output_seq, hidden = rnn(packed_x, graph_embedding.unsqueeze(0), hidden)
-            if isinstance(output_seq, PackedSequence):
-                # Unpack sequence
-                output_seq, _ = pad_packed_sequence(output_seq, batch_first=True)
+            batch_size, seq_len, input_size = edge_seq.shape
 
-            output_seq = torch.sigmoid(output_seq)
-            # Detach hidden state to prevent backprop through old computation graphs
+            # Encode graph to get graph_embedding
+            graph_embedding = encoder(x, edge_index, batch).float()
+            hidden = rnn.init_hidden(graph_embedding)
+
+            # Project edge_seq through rnn.input if rnn.has_input
+            if rnn.has_input:
+                edge_seq = edge_seq.view(-1, input_size)  # (B * T, 2)
+                edge_seq = rnn.relu(rnn.input_raw(edge_seq))  # (B * T, emb)
+                embedding_size = edge_seq.shape[-1]
+                edge_seq = edge_seq.view(batch_size, seq_len, embedding_size)  # (B, T, emb)
+
+            # Use first token as input
+            input_t = edge_seq[:, 0, :].unsqueeze(1)  # (B, 1, emb)
+            graph_embedding_step = graph_embedding.unsqueeze(1)
+
+            output_dim = rnn.output[-1].out_features  # OR just infer from out_proj.size(-1)
+            max_len = args.max_num_node - 1
+
+            outputs = torch.zeros((batch_size, max_len, output_dim), device=device)
+            # Autoregressive decoding
+            for t in range(max_len):
+                input_combined = torch.cat((input_t, graph_embedding_step), dim=-1)
+                out, hidden = rnn.rnn(input_combined, hidden)
+                out_proj = rnn.output(out)
+                out_proj = torch.sigmoid(out_proj)
+
+                outputs[:, t, :] = out_proj.squeeze(1)
+
+                for t in range(max_len):
+                    # No teacher forcing in test mode
+                    input_t = rnn.relu(rnn.input_pred(out_proj.squeeze(1))).unsqueeze(1)
+
             hidden = hidden.detach()
-            for i in range(test_batch_size):
-                print("Output sequence shape:", output_seq.shape)
 
-                adj_output = torch.tanh(output_seq[i])  # Squashes values into [-1, 1] range
-                adj_output = (adj_output + 1) / 2  # Rescale to [0,1]
-                adj_output = adj_output.cpu().detach().numpy()  # Convert to NumPy
+            # Postprocess each sample in the batch
+            for i in range(batch_size):
+                adj_output = torch.tanh(outputs[i])
+                adj_output = (adj_output + 1) / 2  # Normalize to [0, 1]
+                adj_output = adj_output.cpu().numpy()
 
-                # Decode adjacency matrix
+                # Decode adjacency matrix and convert to graph
                 adj_pred = dec_decode_adj(adj_output)
-
-                print("Adjacency Matrix Shape:", adj_pred.shape)
-                G_pred = get_graph(adj_pred)  # Convert to a graph
-                print("Generated Graph Info:", nx.info(G_pred))
+                G_pred = get_graph(adj_pred)
+                print(f"Decoded graph has {G_pred.number_of_nodes()} nodes, {G_pred.number_of_edges()} edges")
                 G_pred_list.append(G_pred)
+
+    return G_pred_list
+
+def test_dec_epoch(epoch, dataset_test, args, encoder, rnn, output, test_batch_size=16):
+    encoder.eval()
+    rnn.eval()
+    output.eval()
+
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    G_pred_list = []
+
+    max_num_node = int(args.max_num_node)
+    max_prev_node = int(args.max_prev_node)
+
+    with torch.no_grad():
+        for batch_data in dataset_test:
+            x = batch_data['x'].to(device)
+            edge_index = batch_data['edge_index'].to(device)
+            batch = batch_data['batch'].to(device)
+
+            # Graph embedding
+            graph_embedding = encoder(x, edge_index, batch).float()  # [batch_size, hidden_size]
+            hidden = rnn.init_hidden(graph_embedding)  # [num_layers, batch_size, hidden_size]
+
+            # Init with <start> token
+            x_step = torch.ones(test_batch_size, 1, max_prev_node).to(device)  # (B, 1, P)
+            y_pred_long = torch.zeros(test_batch_size, max_num_node, max_prev_node).to(device)
+
+            for i in range(max_num_node):
+                # Input projection of raw step
+                if rnn.has_input:
+                    x_step_proj = rnn.relu(rnn.input(x_step.view(-1, max_prev_node)))  # [B, embed]
+                    x_step_proj = x_step_proj.view(test_batch_size, 1, -1)  # [B, 1, embed]
+                else:
+                    x_step_proj = x_step  # Should already be projected correctly
+
+                # Expand graph embedding for timestep
+                graph_embedding_step = graph_embedding.unsqueeze(1)  # [B, 1, hidden]
+
+                # Concatenate projected input and graph embedding
+                rnn_input = torch.cat((x_step_proj, graph_embedding_step), dim=-1)  # [B, 1, embed + hidden]
+
+                # GRU step
+                out_proj, hidden = rnn.rnn(rnn_input, hidden)
+
+                # Output projection (via output module)
+                output_y_pred_step = output.output(out_proj)
+                output_y_pred_step = torch.sigmoid(output_y_pred_step.squeeze(1))  # [B, P]
+
+                # Sampling
+                output_x_step = (output_y_pred_step > 0.5).float()
+                x_step_next = torch.zeros(test_batch_size, 1, max_prev_node).to(device)
+                x_step_next[:, :, :output_x_step.shape[-1]] = output_x_step.unsqueeze(1)
+
+                # Update inputs
+                x_step = x_step_next
+                y_pred_long[:, i:i + 1, :] = x_step
+
+            # Convert and decode
+            y_pred_long_data = y_pred_long.data.long()
+            for i in range(test_batch_size):
+                if i == 0:
+                    print("[debug] Raw decoder output:")
+                    print(y_pred_long[0].cpu().numpy())  # shape (T, P)
+                #print("Output sequence shape:", y_pred_long_data[i].shape)
+                adj_pred = dec_decode_adj(y_pred_long_data[i].cpu().numpy())
+                G_pred = get_graph(adj_pred)
+                G_pred_list.append(G_pred)
+                if i == 0:
+                    print(f"Decoded graph has {G_pred.number_of_nodes()} nodes, {G_pred.number_of_edges()} edges")
+    return G_pred_list
+
+
+def atest_dec_unconditional(epoch, args, rnn, output, test_batch_size=16):
+    """
+    Autoregressive graph generation with the GRU_plain_dec decoder,
+    *without* any dataset or encoder—just like test_rnn_epoch.
+    """
+    rnn.eval()
+    output.eval()
+
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    G_pred_list = []
+
+    max_num_node  = int(args.max_num_node)
+    max_prev_node = int(args.max_prev_node)
+
+    with torch.no_grad():
+        # 1) Create a dummy “graph_embedding” of zeros:
+        #    shape = (batch_size, hidden_size)
+        graph_embedding = torch.zeros(test_batch_size, rnn.hidden_size, device=device)
+        hidden = rnn.init_hidden(graph_embedding)            # (num_layers, B, hidden_size)
+
+        # 2) Initialize the first input token (<start>):
+        x_step     = torch.ones(test_batch_size, 1, max_prev_node, device=device)
+        y_pred_long = torch.zeros(test_batch_size, max_num_node, max_prev_node, device=device)
+
+        # 3) Autoregressive loop
+        for t in range(max_num_node):
+            if rnn.has_input:
+                # project the full “row” vector
+                inp = x_step.view(-1, max_prev_node)        # (B, P)
+                inp = rnn.relu(rnn.input_pred(inp))               # Linear(P→emb) + ReLU
+                x_step_proj = inp.view(test_batch_size, 1, -1)
+            else:
+                x_step_proj = x_step
+
+            # expand zero graph-embedding to concatenate
+            graph_emb_step = graph_embedding.unsqueeze(1)    # (B, 1, hidden)
+            rnn_in = torch.cat((x_step_proj, graph_emb_step), dim=-1)  # (B, 1, emb+hidden)
+
+            out, hidden = rnn.rnn(rnn_in, hidden)            # one GRU step
+            y_hat = torch.sigmoid(output.output(out).squeeze(1))  # (B, P)
+
+            # sample a discrete row from the sigmoids
+            row = sample_sigmoid(y_hat, sample=True, sample_time=1)  
+            # pack it back to (B,1,P)
+            x_step = row.unsqueeze(1)
+            # stash it
+            y_pred_long[:, t, :] = row
+
+        # 4) Decode to networkx graphs
+        y_long = y_pred_long.long().cpu().numpy()
+        for i in range(test_batch_size):
+            adj_pred = dec_decode_adj(y_long[i])
+            G_pred   = get_graph(adj_pred)
+            G_pred_list.append(G_pred)
+            if i == 0:
+                print(f"[uncond] Decoded graph has "
+                      f"{G_pred.number_of_nodes()} nodes, "
+                      f"{G_pred.number_of_edges()} edges")
+
+    return G_pred_list
+
+def test_dec_unconditional(epoch, args, rnn, output, test_batch_size=16):
+    """
+    Autoregressive graph generation *without* any dataset or encoder.
+    Uses squeeze/unsqueeze on x_step instead of view(), so you
+    never have to worry about P or shape mismatches.
+    """
+    rnn.eval()
+    output.eval()
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+    B = test_batch_size
+    T = int(args.max_num_node)
+
+    G_pred_list = []
+    with torch.no_grad():
+        # 1) zero “graph_embedding”
+        H = rnn.hidden_size
+        graph_embedding = torch.zeros(B, H, device=device)
+        hidden = rnn.init_hidden(graph_embedding)  # (num_layers, B, H)
+
+        # 2) start token: full-one row of length P = whatever input_pred expects
+        P = output.output[0].in_features
+        x_step      = torch.ones(B, 1, P, device=device)  # (B,1,P)
+        y_pred_long = torch.zeros(B, T, P, device=device)
+
+        for t in range(T):
+            # squeeze off that middle dim → (B,P)
+            inp = x_step.squeeze(1)
+
+            # project (P → emb)
+            inp_proj   = inp     # (B, emb)
+            x_step_proj = inp_proj.unsqueeze(1)             # (B,1,emb)
+
+            # concat with zero graph-embedding
+            emb_step = graph_embedding.unsqueeze(1)         # (B,1,H)
+            rnn_in   = torch.cat((x_step_proj, emb_step), dim=-1)
+
+            # one GRU step + output
+            out, hidden = rnn.rnn(rnn_in, hidden)
+            y_hat = torch.sigmoid(output(out).squeeze(1))  # artık output.output değil  # (B,P)
+
+            # sample next row
+            row    = sample_sigmoid(y_hat, sample=True, sample_time=1)  # (B,P)
+            x_step = row.unsqueeze(1)                           # (B,1,P)
+            y_pred_long[:, t, :] = row
+
+        # 3) decode into networkx graphs
+        arr = y_pred_long.long().cpu().numpy()
+        for i in range(B):
+            adj = dec_decode_adj(arr[i])
+            G   = get_graph(adj)
+            G_pred_list.append(G)
+            if i == 0:
+                print(f"[uncond] Graph has {G.number_of_nodes()} nodes, "
+                      f"{G.number_of_edges()} edges")
 
     return G_pred_list
 
 
 def test_rnn_epoch(epoch, args, rnn, output, test_batch_size=16):
-    rnn.hidden = rnn.init_hidden(test_batch_size)
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    H = rnn.hidden_size
+    B = test_batch_size
+    graph_embedding = torch.zeros(B, H, device=device)
+    rnn.hidden = rnn.init_hidden(graph_embedding)  # (num_layers, B, H)
+    #rnn.hidden = rnn.init_hidden(test_batch_size)
     rnn.eval()
     output.eval()
 
@@ -380,7 +559,7 @@ def test_rnn_epoch(epoch, args, rnn, output, test_batch_size=16):
     y_pred_long = Variable(torch.zeros(test_batch_size, max_num_node, args.max_prev_node)).cuda() # discrete prediction
     x_step = Variable(torch.ones(test_batch_size,1,args.max_prev_node)).cuda()
     for i in range(max_num_node):
-        h = rnn(x_step)
+        h = rnn(x_step, graph_embedding)
         # output.hidden = h.permute(1,0,2)
         hidden_null = Variable(torch.zeros(args.num_layers - 1, h.size(0), h.size(2))).cuda()
         output.hidden = torch.cat((h.permute(1,0,2), hidden_null),
@@ -693,6 +872,84 @@ def train_rnn_forward_epoch(epoch, args, rnn, output, data_loader):
         loss_sum += loss.data*feature_dim/y.size(0)
     return loss_sum/(batch_idx+1)
 
+def arnn_forward_train(
+    rnn, output_proj, graph_embedding, edge_seq, raw_edge_seq, y,
+    edge_lengths, max_len, teacher_forcing_ratio, device
+):
+    batch_size, seq_len, input_size = edge_seq.size()
+    output_dim = y.size(-1)
+
+    hidden = rnn.init_hidden(graph_embedding)
+    graph_embedding_step = graph_embedding.unsqueeze(1)
+
+    if rnn.has_input:
+        edge_seq = edge_seq.view(-1, input_size)
+        edge_seq = rnn.relu(rnn.input_raw(edge_seq))
+        emb_size = edge_seq.size(-1)
+        edge_seq = edge_seq.view(batch_size, seq_len, emb_size)
+
+    input_t = edge_seq[:, 0, :].unsqueeze(1)
+    outputs = torch.zeros((batch_size, max_len, output_dim), device=device)
+
+    for t in range(max_len):
+        input_combined = torch.cat((input_t, graph_embedding_step), dim=-1)
+        out, hidden = rnn.rnn(input_combined, hidden)
+        out_proj = torch.sigmoid(output_proj(out))
+        outputs[:, t, :] = out_proj.squeeze(1)
+
+        teacher_force = random.random() < teacher_forcing_ratio
+        if t + 1 < max_len:
+            if teacher_force:
+                raw_edge_input = raw_edge_seq[:, t + 1, :]
+                input_t = rnn.relu(rnn.input_raw(raw_edge_input)).unsqueeze(1)
+            else:
+                input_t = rnn.relu(rnn.input_pred(out_proj.squeeze(1))).unsqueeze(1)
+
+    return outputs[:, :y.size(1), :], hidden
+
+def rnn_forward_train(
+    rnn, output_proj, graph_embedding, edge_seq, raw_edge_seq, y,
+    edge_lengths, max_len, teacher_forcing_ratio, device
+):
+    batch_size, seq_len, input_size = edge_seq.size()
+    output_dim = y.size(-1)
+
+    hidden = rnn.init_hidden(graph_embedding)
+    graph_embedding_step = graph_embedding.unsqueeze(1)
+
+    if rnn.has_input:
+        edge_seq = edge_seq.view(-1, input_size)
+        edge_seq = rnn.relu(rnn.input_raw(edge_seq))
+        emb_size = edge_seq.size(-1)
+        edge_seq = edge_seq.view(batch_size, seq_len, emb_size)
+
+    input_t = edge_seq[:, 0, :].unsqueeze(1)  # [B, 1, E]
+    outputs = torch.zeros((batch_size, max_len, output_dim), device=device)
+
+    for t in range(max_len):
+        input_combined = torch.cat((input_t, graph_embedding_step), dim=-1)  # [B, 1, E+H]
+        out, hidden = rnn.rnn(input_combined, hidden)
+        out_proj = torch.sigmoid(output_proj(out))
+        outputs[:, t, :] = out_proj.squeeze(1)
+
+        if t + 1 < seq_len:
+            teacher_force = random.random() < teacher_forcing_ratio
+            if teacher_force:
+                raw_edge_input = raw_edge_seq[:, t + 1, :]  # [B, P]
+                input_t = rnn.relu(rnn.input_raw(raw_edge_input)).unsqueeze(1)
+            else:
+                input_t = rnn.relu(rnn.input_pred(out_proj.squeeze(1))).unsqueeze(1)
+        else:
+            input_t = rnn.relu(rnn.input_pred(out_proj.squeeze(1))).unsqueeze(1)
+
+    # Apply mask to zero out padded positions in the loss (optional)
+    # Mask: 1 where length > t
+    edge_lengths = edge_lengths.to(device)  # Add this before using edge_lengths
+    mask = torch.arange(max_len, device=device).expand(batch_size, max_len) < edge_lengths.unsqueeze(1)
+    mask = mask.unsqueeze(-1).expand_as(outputs)
+
+    outputs = outputs * mask  # apply mask to output (optional)
+    return outputs[:, :y.size(1), :], hidden
 
 ########### train function for LSTM + VAE
 def train(args, dataset_train, rnn, output):
@@ -730,16 +987,7 @@ def train(args, dataset_train, rnn, output):
         now = datetime.datetime.now()
         print(now.time())
         time_start = tm.time()
-        # train
-        if 'GraphRNN_VAE' in args.note:
-            train_vae_epoch(epoch, args, rnn, output, dataset_train,
-                            optimizer_rnn, optimizer_output,
-                            scheduler_rnn, scheduler_output)
-        elif 'GraphRNN_MLP' in args.note:
-            train_mlp_epoch(epoch, args, rnn, output, dataset_train,
-                            optimizer_rnn, optimizer_output,
-                            scheduler_rnn, scheduler_output)
-        elif 'GraphRNN_RNN' in args.note:
+        if 'GraphRNN_RNN' in args.note:
             train_rnn_epoch(epoch, args, rnn, output, dataset_train,
                             optimizer_rnn, optimizer_output,
                             scheduler_rnn, scheduler_output)
@@ -756,11 +1004,7 @@ def train(args, dataset_train, rnn, output):
                 G_pred = []
                 while len(G_pred)<args.test_total_size:
                     print(len(G_pred))
-                    if 'GraphRNN_VAE' in args.note:
-                        G_pred_step = test_vae_epoch(epoch, args, rnn, output, test_batch_size=args.test_batch_size,sample_time=sample_time)
-                    elif 'GraphRNN_MLP' in args.note:
-                        G_pred_step = test_mlp_epoch(epoch, args, rnn, output, test_batch_size=args.test_batch_size,sample_time=sample_time)
-                    elif 'GraphRNN_RNN' in args.note:
+                    if 'GraphRNN_RNN' in args.note:
                         G_pred_step = test_rnn_epoch(epoch, args, rnn, output, test_batch_size=args.test_batch_size)
                     elif 'GraphRNN_ATT' in args.note:
                         G_pred_step = test_rnn_with_attention_epoch(epoch, args, rnn, output, test_batch_size=args.test_batch_size)
@@ -785,7 +1029,7 @@ def train(args, dataset_train, rnn, output):
         epoch += 1
     np.save(args.timing_save_path+args.fname,time_all)
 
-def train_dec(args, dataset_train, dataset_test, encoder, rnn, output):
+def atrain_dec(args, dataset_train, dataset_test, encoder, rnn, output):
     # Check if we need to load existing models
     if args.load:
         fname_rnn = args.model_save_path + args.fname + 'rnn_' + str(args.load_epoch) + '.dat'
@@ -803,7 +1047,7 @@ def train_dec(args, dataset_train, dataset_test, encoder, rnn, output):
     encoder.to(device)
     rnn.to(device)
     output.to(device)
-
+    teacher_forcing_ratio = 0.5  # You can anneal this over time too
     # Initialize optimizers
     optimizer_encoder = optim.Adam(encoder.parameters(), lr=args.lr)
     optimizer_rnn = optim.Adam(rnn.parameters(), lr=args.lr)
@@ -817,6 +1061,8 @@ def train_dec(args, dataset_train, dataset_test, encoder, rnn, output):
     # Track timing for each epoch
     time_all = np.zeros(args.epochs)
 
+    teacher_forcing_ratio = 0.5  # You can decrease this over epochs for scheduled sampling
+
     while epoch <= args.epochs:
         print(f'\nEpoch {epoch}/{args.epochs}')
         epoch_start_time = tm.time()
@@ -824,96 +1070,114 @@ def train_dec(args, dataset_train, dataset_test, encoder, rnn, output):
         encoder.train()
         rnn.train()
         output.train()
-        # Initialize the first batch to extract input dimensions for hidden state
-        first_batch = next(iter(dataset_train))
 
-        # Move batch data to GPU
-        x = first_batch['x'].to(device)
-        edge_index = first_batch['edge_index'].to(device)
-        batch = first_batch['batch'].to(device)
-        batch_size = dataset_train.batch_size  # Ensure correct batch size
-        # Initialize hidden state once per epoch
-        # Forward pass through encoder to get graph embeddings
-        graph_embedding = encoder(x, edge_index, batch).float()
-        
-        hidden = rnn.init_hidden(graph_embedding.repeat(1, batch_size, 1) + 0.1 * torch.randn_like(graph_embedding))
-                
         for batch_data in dataset_train:
             # Move batch data to GPU
             x = batch_data['x'].to(device)
             y = batch_data['y'].to(device)
             edge_index = batch_data['edge_index'].to(device)
             batch = batch_data['batch'].to(device)
-            edge_seq = batch_data['edge_seq'].to(device)
-            
-            edge_seq = edge_seq.float()
-            
-            # Forward pass through encoder to get graph embeddings
-            graph_embedding = encoder(x, edge_index, batch).float()
-            
-            # Ensure edge_seq has correct dtype and dimensions
-            edge_seq = edge_seq.float()
-            
+            edge_seq = batch_data['edge_seq'].to(device).float()
+            raw_edge_seq = batch_data['edge_seq'].to(device).float()
 
-            # Compute actual lengths of edge sequences
+            # Get edge sequence lengths and sort if needed
             edge_lengths = batch_data['len']
+            batch_size, seq_len, input_size = edge_seq.shape
+            output_dim = y.shape[-1]
 
-            sorted_indices = torch.argsort(edge_lengths, descending=True)
-            edge_seq = edge_seq[sorted_indices]
-            edge_lengths = edge_lengths[sorted_indices]
-            # Pack the sequence before feeding into RNN
-            packed_x = pack_padded_sequence(x, edge_lengths.cpu(), batch_first=True, enforce_sorted=False)
-            # RNN forward pass
-            output_seq, hidden = rnn(packed_x, graph_embedding.unsqueeze(0), hidden)
-            if isinstance(output_seq, PackedSequence):
-                # Unpack sequence
-                output_seq, _ = pad_packed_sequence(output_seq, batch_first=True)
+            # Encode graph to get graph_embedding
+            graph_embedding = encoder(x, edge_index, batch).float()
 
-            output_seq = torch.sigmoid(output_seq)
-            target_seq = y
-            bce_loss = binary_cross_entropy_weight(output_seq, target_seq)
+            # Initialize hidden state with graph embedding
+            hidden = rnn.init_hidden(graph_embedding)
 
-            # Compute community loss from predicted adjacency
-            adj_output = output_seq[0].cpu().detach().numpy()
-            adj_pred = dec_decode_adj(adj_output)
-            comm_loss = approximate_community_loss(adj_pred)
+            # Project edge_seq through rnn.input if rnn.has_input
+            if rnn.has_input:
+                edge_seq = edge_seq.view(-1, input_size)  # (B * T, 2)
+                edge_seq = rnn.relu(rnn.input_raw(edge_seq))  # (B * T, emb)
+                embedding_size = edge_seq.shape[-1]
+                edge_seq = edge_seq.view(batch_size, seq_len, embedding_size)  # (B, T, emb)
 
-            λ = 0.1  # Regularization strength
-            loss = bce_loss + λ * comm_loss            # Backpropagation
+            # Use first token as input
+            input_t = edge_seq[:, 0, :].unsqueeze(1)  # (B, 1, emb)
+
+            graph_embedding_step = graph_embedding.unsqueeze(1)
+            # Prepare output tensor
+            max_len = args.max_num_node
+
+            outputs = torch.zeros((batch_size, max_len, output_dim), device=device)
+
+            # Expand graph embedding for each timestep
+            #graph_embedding_step = graph_embedding.unsqueeze(1)
+
+            # Decode one step at a time
+            for t in range(max_len):
+                # print("graph_embedding_step:", graph_embedding_step.shape)
+                # print("input_t:", input_t.shape)
+                # # Concatenate decoder input with graph embedding
+                input_combined = torch.cat((input_t, graph_embedding_step), dim=-1)
+
+                # RNN forward step
+                out, hidden = rnn.rnn(input_combined, hidden)  # out: (B, 1, hidden_size)
+
+                # Output projection
+                out_proj = rnn.output(out)  # Shape: (B, 1, output_dim)
+                out_proj = torch.sigmoid(out_proj)
+
+                # Store output
+                outputs[:, t, :] = out_proj.squeeze(1)
+
+                # Teacher forcing decision
+                teacher_force = random.random() < teacher_forcing_ratio
+
+                if t + 1 < max_len:
+                    if teacher_force:
+                        raw_edge_input = raw_edge_seq[:, t + 1, :]  # (B, 2)
+                        input_t = rnn.relu(rnn.input_raw(raw_edge_input)).unsqueeze(1)  # (B, 1, emb)                    
+                    else:
+                        input_t = rnn.relu(rnn.input_pred(out_proj.squeeze(1))).unsqueeze(1)
+            
+            
+            T_gt = min(outputs.size(1), y.size(1))
+            outputs = outputs[:, :T_gt, :]            # Compute loss
+            
+            loss = masked_binary_cross_entropy(outputs, y, edge_lengths)
+
+            # Backpropagation
             optimizer_encoder.zero_grad()
             optimizer_rnn.zero_grad()
             optimizer_output.zero_grad()
             loss.backward()
-            
-            # Clip gradients to prevent explosion
+
+            # Gradient clipping
             torch.nn.utils.clip_grad_norm_(encoder.parameters(), max_norm=1.0)
             torch.nn.utils.clip_grad_norm_(rnn.parameters(), max_norm=1.0)
             torch.nn.utils.clip_grad_norm_(output.parameters(), max_norm=1.0)
-            
+
             optimizer_encoder.step()
             optimizer_rnn.step()
             optimizer_output.step()
-            
-            # Detach hidden state to prevent backprop through old computation graphs
+
+            # Detach hidden state
             hidden = hidden.detach()
-    
-        # Update learning rate
+
+        # Learning rate scheduler
         scheduler_encoder.step()
         scheduler_rnn.step()
         scheduler_output.step()
-        
-        # Log epoch information
+
+        # Logging
         epoch_time = tm.time() - epoch_start_time
         time_all[epoch - 1] = epoch_time
         print(f'Epoch {epoch} completed in {epoch_time:.2f} seconds. Loss: {loss.item():.4f}')
-        
-        # Save model checkpoints
+
+        # Checkpoint
         if args.save and epoch % args.epochs_save == 0:
             torch.save(encoder.state_dict(), f"{args.model_save_path}{args.fname}encoder_{epoch}.dat")
             torch.save(rnn.state_dict(), f"{args.model_save_path}{args.fname}rnn_{epoch}.dat")
             torch.save(output.state_dict(), f"{args.model_save_path}{args.fname}output_{epoch}.dat")
             print(f'Models saved for epoch {epoch}.')
-        
+
         epoch += 1
 
 
@@ -930,7 +1194,7 @@ def train_dec(args, dataset_train, dataset_test, encoder, rnn, output):
             G_pred = []
             while len(G_pred) < args.test_total_size:
                 print(f"Generating graph {len(G_pred)} / {args.test_total_size}")
-                G_pred_step = test_rnn_dec_epoch(epoch, dataset_test, args, encoder, rnn, output, test_batch_size=args.test_batch_size)
+                G_pred_step = test_dec_epoch(epoch, dataset_test, args, encoder, rnn, output, test_batch_size=args.test_batch_size)
                 G_pred.extend(G_pred_step)
             # Save graphs
             # Save graphs after generating enough samples
@@ -939,7 +1203,114 @@ def train_dec(args, dataset_train, dataset_test, encoder, rnn, output):
                 pickle.dump(G_pred, f)
             print(f"Graphs saved at {fname}")
     print('Test done.')
-    
+ 
+def train_dec(args, dataset_train, dataset_test, encoder, rnn, output):
+    # Check if we need to load existing models
+    if args.load:
+        fname_rnn = args.model_save_path + args.fname + 'rnn_' + str(args.load_epoch) + '.dat'
+        fname_output = args.model_save_path + args.fname + 'output_' + str(args.load_epoch) + '.dat'
+        rnn.load_state_dict(torch.load(fname_rnn))
+        output.load_state_dict(torch.load(fname_output))
+        args.lr = 0.00001
+        epoch = args.load_epoch
+        print(f'Model loaded! Continuing from epoch {epoch}, with learning rate {args.lr}')
+    else:
+        epoch = 1
+
+    # Set device
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    encoder.to(device)
+    rnn.to(device)
+    output.to(device)
+
+    optimizer_encoder = optim.Adam(encoder.parameters(), lr=args.lr)
+    optimizer_rnn = optim.Adam(rnn.parameters(), lr=args.lr)
+    optimizer_output = optim.Adam(output.parameters(), lr=args.lr)
+
+    scheduler_encoder = MultiStepLR(optimizer_encoder, milestones=args.milestones, gamma=args.lr_rate)
+    scheduler_rnn = MultiStepLR(optimizer_rnn, milestones=args.milestones, gamma=args.lr_rate)
+    scheduler_output = MultiStepLR(optimizer_output, milestones=args.milestones, gamma=args.lr_rate)
+
+    time_all = np.zeros(args.epochs)
+    teacher_forcing_ratio = 0.5
+
+    while epoch <= args.epochs:
+        print(f'\nEpoch {epoch}/{args.epochs}')
+        epoch_start_time = tm.time()
+
+        encoder.train()
+        rnn.train()
+        output.train()
+
+        for batch_data in dataset_train:
+            x = batch_data['x'].to(device)
+            y = batch_data['y'].to(device)
+            edge_index = batch_data['edge_index'].to(device)
+            batch = batch_data['batch'].to(device)
+            edge_seq = batch_data['edge_seq'].to(device).float()
+            raw_edge_seq = batch_data['edge_seq'].to(device).float()
+            edge_lengths = batch_data['len']
+
+            graph_embedding = encoder(x, edge_index, batch).float()
+
+            outputs, hidden = rnn_forward_train(
+                rnn, rnn.output, graph_embedding, edge_seq, raw_edge_seq, y,
+                edge_lengths, max_len=args.max_num_node, teacher_forcing_ratio=teacher_forcing_ratio,
+                device=device
+            )
+
+            loss = binary_cross_entropy_weight(outputs, y)
+
+            optimizer_encoder.zero_grad()
+            optimizer_rnn.zero_grad()
+            optimizer_output.zero_grad()
+            loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(encoder.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(rnn.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(output.parameters(), max_norm=1.0)
+
+            optimizer_encoder.step()
+            optimizer_rnn.step()
+            optimizer_output.step()
+
+            hidden = hidden.detach()
+
+        scheduler_encoder.step()
+        scheduler_rnn.step()
+        scheduler_output.step()
+
+        epoch_time = tm.time() - epoch_start_time
+        time_all[epoch - 1] = epoch_time
+        print(f'Epoch {epoch} completed in {epoch_time:.2f} seconds. Loss: {loss.item():.4f}')
+
+        if args.save and epoch % args.epochs_save == 0:
+            torch.save(encoder.state_dict(), f"{args.model_save_path}{args.fname}encoder_{epoch}.dat")
+            torch.save(rnn.state_dict(), f"{args.model_save_path}{args.fname}rnn_{epoch}.dat")
+            torch.save(output.state_dict(), f"{args.model_save_path}{args.fname}output_{epoch}.dat")
+            print(f'Models saved for epoch {epoch}.')
+
+        epoch += 1
+
+    np.save(args.timing_save_path + args.fname, time_all)
+    print('Training completed.')
+
+    epoch -= 1
+    print(f"Epoch: {epoch}, epochs_test: {args.epochs_test}, epochs_test_start: {args.epochs_test_start}")
+    if epoch % args.epochs_test == 0 and epoch >= args.epochs_test_start:
+        print(f"Testing at epoch {epoch}...")
+        for sample_time in range(1, 4):
+            G_pred = []
+            while len(G_pred) < args.test_total_size:
+                print(f"Generating graph {len(G_pred)} / {args.test_total_size}")
+                G_pred_step = test_dec_epoch(epoch, dataset_test, args, encoder, rnn, output, test_batch_size=args.test_batch_size)
+                G_pred.extend(G_pred_step)
+
+            fname = os.path.join(args.graph_save_path, f"{args.fname_pred}{epoch}_{sample_time}.dat")
+            with open(fname, 'wb') as f:
+                pickle.dump(G_pred, f)
+            print(f"Graphs saved at {fname}")
+    print('Test done.')   
 ########### for graph completion task
 def train_graph_completion(args, dataset_test, rnn, output):
     fname = args.model_save_path + args.fname + 'lstm_' + str(args.load_epoch) + '.dat'

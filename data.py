@@ -16,9 +16,9 @@ import os
 import time
 from model import *
 from utils import *
+from torch.utils.data import DataLoader
 
-
-
+from torch_geometric.data import Data, Batch as PyGBatch
 
 # load ENZYMES and PROTEIN and DD dataset
 def Graph_load_batch(min_num_nodes = 20, max_num_nodes = 1000, name = 'ENZYMES',node_attributes = True,graph_labels=True):
@@ -304,7 +304,29 @@ import numpy as np
 
 #     return adj_full
 
-def dec_decode_adj(adj_output, k=3):
+# def dec_decode_adj(adj_output, k=3):
+#     max_prev_node = adj_output.shape[1]
+#     n_nodes = adj_output.shape[0] + 1
+
+#     adj = np.zeros((adj_output.shape[0], adj_output.shape[0]))
+
+#     for i in range(adj_output.shape[0]):
+#         input_start = max(0, i - max_prev_node + 1)
+#         input_end = i + 1
+#         output_start = max_prev_node + input_start - input_end
+#         output_end = max_prev_node
+#         edge_scores = adj_output[i, ::-1][output_start:output_end]
+
+#         top_k_indices = np.argsort(edge_scores)[-k:]
+#         adj[i, input_start:input_end][top_k_indices] = 1
+
+#     adj_full = np.zeros((n_nodes, n_nodes), dtype=int)
+#     adj_full[1:n_nodes, 0:n_nodes-1] = np.tril(adj, 0)
+#     adj_full = adj_full + adj_full.T
+#     np.fill_diagonal(adj_full, 0)
+#     return adj_full
+
+def dec_decode_adj(adj_output, threshold=0.5, max_k=4):
     max_prev_node = adj_output.shape[1]
     n_nodes = adj_output.shape[0] + 1
 
@@ -317,8 +339,11 @@ def dec_decode_adj(adj_output, k=3):
         output_end = max_prev_node
         edge_scores = adj_output[i, ::-1][output_start:output_end]
 
-        top_k_indices = np.argsort(edge_scores)[-k:]
-        adj[i, input_start:input_end][top_k_indices] = 1
+        if max_k:
+            top_k = np.argsort(edge_scores)[-max_k:]
+            adj[i, input_start:input_end][top_k] = 1
+        else:
+            adj[i, input_start:input_end] = (edge_scores > threshold).astype(int)
 
     adj_full = np.zeros((n_nodes, n_nodes), dtype=int)
     adj_full[1:n_nodes, 0:n_nodes-1] = np.tril(adj, 0)
@@ -550,36 +575,71 @@ def test_encode_decode_adj_full():
 #         return max_prev_node
 
 def custom_collate(batch):
-    import torch
+    # batch is a list of dicts, each with:
+    #   'x':         (n_i, feat_dim)
+    #   'edge_index':(2, E_i)
+    #   'edge_seq':  (T, in_dim)
+    #   'y':         (T, out_dim)
+    #   'len':       scalar
 
-    # Extract individual components
-    x = pad_sequence([item['x'] for item in batch], batch_first=True, padding_value=0)
-    y = pad_sequence([item['y'] for item in batch], batch_first=True, padding_value=0)
-    batch_tensor = pad_sequence([item['batch'] for item in batch], batch_first=True, padding_value=-1)
-    edge_seq = pad_sequence([item['edge_seq'] for item in batch], batch_first=True, padding_value=0)
-    lengths = torch.tensor([item['len'] for item in batch], dtype=torch.long)
+    # 1) build a PyG Batch for the GNN inputs
+    pyg_graphs = [Data(x=item['x'], edge_index=item['edge_index']) for item in batch]
+    batched_graph = PyGBatch.from_data_list(pyg_graphs)
 
-    # Flatten edge_index and adjust node indices
-    edge_index_list = []
-    node_offset = 0
-    for i, item in enumerate(batch):
-        edge_index = item['edge_index']
-        # Adjust node indices for the batch
-        adjusted_edge_index = edge_index + node_offset
-        edge_index_list.append(adjusted_edge_index)
-        node_offset += item['x'].size(0)  # Increment offset by number of nodes in the graph
-
-    # Concatenate all edge indices
-    edge_index = torch.cat(edge_index_list, dim=1)
+    # 2) pad your RNN sequences
+    edge_seqs = pad_sequence([item['edge_seq'] for item in batch],
+                              batch_first=True, padding_value=0)  # → (B, T, in_dim)
+    labels    = pad_sequence([item['y']        for item in batch],
+                              batch_first=True, padding_value=0)  # → (B, T, out_dim)
+    lengths   = torch.tensor([item['len']    for item in batch], dtype=torch.long)
 
     return {
-        'x': x,
-        'y': y,
-        'edge_index': edge_index,
-        'batch': batch_tensor,
-        'edge_seq': edge_seq,
-        'len': lengths
+      'x':          batched_graph.x,
+      'edge_index': batched_graph.edge_index,
+      'batch':      batched_graph.batch,
+      'edge_seq':   edge_seqs,
+      'y':           labels,
+      'len':        lengths,
     }
+
+# train_loader = DataLoader(
+#     your_dataset,
+#     batch_size=args.batch_size,    # e.g. 32
+#     shuffle=True,
+#     collate_fn=custom_collate
+# )
+
+# def custom_collate(batch):
+#     import torch
+
+#     # Extract individual components
+#     x = pad_sequence([item['x'] for item in batch], batch_first=True, padding_value=0)
+#     y = pad_sequence([item['y'] for item in batch], batch_first=True, padding_value=0)
+#     batch_tensor = pad_sequence([item['batch'] for item in batch], batch_first=True, padding_value=-1)
+#     edge_seq = pad_sequence([item['edge_seq'] for item in batch], batch_first=True, padding_value=0)
+#     lengths = torch.tensor([item['len'] for item in batch], dtype=torch.long)
+
+#     # Flatten edge_index and adjust node indices
+#     edge_index_list = []
+#     node_offset = 0
+#     for i, item in enumerate(batch):
+#         edge_index = item['edge_index']
+#         # Adjust node indices for the batch
+#         adjusted_edge_index = edge_index + node_offset
+#         edge_index_list.append(adjusted_edge_index)
+#         node_offset += item['x'].size(0)  # Increment offset by number of nodes in the graph
+
+#     # Concatenate all edge indices
+#     edge_index = torch.cat(edge_index_list, dim=1)
+
+#     return {
+#         'x': x,
+#         'y': y,
+#         'edge_index': edge_index,
+#         'batch': batch_tensor,
+#         'edge_seq': edge_seq,
+#         'len': lengths
+#     }
 
 class Graph_sequence_sampler_pytorch(torch.utils.data.Dataset):
     def __init__(self, G_list, max_num_node=None, max_prev_node=None, iteration=20000):
