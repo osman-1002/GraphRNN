@@ -8,25 +8,28 @@ class GraphEncoder(nn.Module):
         super(GraphEncoder, self).__init__()
         self.use_attention = use_attention
 
-        if use_attention:
-            self.convs = nn.ModuleList([GATConv(input_dim if i == 0 else hidden_dim, hidden_dim) for i in range(num_layers)])
-        else:
-            self.convs = nn.ModuleList([GATConv(input_dim if i == 0 else hidden_dim, hidden_dim) for i in range(num_layers)])
+        # if use_attention:
+        #     self.convs = nn.ModuleList([GCNConv(input_dim if i == 0 else hidden_dim, hidden_dim) for i in range(num_layers)])
+        # else:
+        self.convs = nn.ModuleList([GCNConv(input_dim if i == 0 else hidden_dim, hidden_dim) for i in range(num_layers)])
 
         self.fc = nn.Linear(hidden_dim, output_dim)  # Project to match GRU_plain hidden size
-
+        self.bn1   = nn.BatchNorm1d(hidden_dim)
     def forward(self, x, edge_index, batch):
         mask = (edge_index[0] < x.size(0)) & (edge_index[1] < x.size(0))
         edge_index = edge_index[:, mask]  # Filter valid edges
 
         for conv in self.convs:
             x = conv(x, edge_index)
+            x = self.bn1(x)
             x = F.relu(x)
 
         batch = batch.view(-1)          # Flatten batch to 1D
         x = x.view(-1, x.size(-1))      # Flatten x to match batch size
 
         graph_embedding = global_mean_pool(x, batch)
+        #print("After GCN layer:", x.mean().item(), x.std().item())
+
         return self.fc(graph_embedding)  # Ensure output matches GRU_plain hidden size
 
 # Example usage

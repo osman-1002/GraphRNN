@@ -116,22 +116,12 @@ if __name__ == '__main__':
     else:
         dataset = Graph_sequence_sampler_pytorch(graphs_train, max_prev_node=args.max_prev_node, max_num_node=args.max_num_node)
 
-    sampler = torch.utils.data.sampler.WeightedRandomSampler(
-        [1.0 / len(dataset) for _ in range(len(dataset))],
-        num_samples=args.batch_size * args.batch_ratio,
-        replacement=True
-    )
-    dataset_loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, num_workers=args.num_workers, sampler=sampler, collate_fn= custom_collate)
-    
-    dataset_ = Graph_sequence_sampler_pytorch(graphs_test, max_prev_node=args.max_prev_node, max_num_node=args.max_num_node)
 
-    sampler_ = torch.utils.data.sampler.WeightedRandomSampler(
-        [1.0 / len(dataset_) for _ in range(len(dataset_))],
-        num_samples=args.batch_size * args.batch_ratio,
-        replacement=True
-    )
-    dataset_test = torch.utils.data.DataLoader(dataset_, batch_size=args.batch_size, num_workers=args.num_workers, sampler=sampler_, collate_fn= custom_collate)
-    #dataset_test = dataset_loader
+    sample_strategy = torch.utils.data.sampler.WeightedRandomSampler([1.0 / len(dataset) for i in range(len(dataset))],
+                                                                     num_samples=args.batch_size*args.batch_ratio, replacement=True)
+    dataset_loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, num_workers=args.num_workers,
+                                               sampler=sample_strategy, collate_fn=custom_collate)
+    
     ### model initialization
     ## Graph RNN VAE model
     # lstm = LSTM_plain(input_size=args.max_prev_node, embedding_size=args.embedding_size_lstm,
@@ -141,19 +131,59 @@ if __name__ == '__main__':
             print(f"{key}: shape {value.shape}")
         break  # Only need to check once
     # Initialize models
-    encoder = GraphEncoder(input_dim=80, hidden_dim=args.hidden_size_rnn, 
-                           output_dim=args.hidden_size_rnn, num_layers=args.num_layers, 
-                           use_attention=False).cuda()
-    rnn = GRU_plain_dec(input_size=args.max_prev_node, embedding_size=args.embedding_size_rnn,
-                        hidden_size=args.hidden_size_rnn, num_layers=args.num_layers, has_input=True,
-                        has_output=True, output_size=80).cuda()
-    output = GRU_plain_dec(input_size=1, embedding_size=args.embedding_size_rnn_output,
-                        hidden_size=args.hidden_size_rnn_output, num_layers=args.num_layers, has_input=True,
-                        has_output=True, output_size=1).cuda()    
+    if 'GraphRNN_ATT' in args.note:
+        # Encoder: input_dim = max_prev_node, hidden_dim = hidden_size_rnn,
+        #           attention_dim = embedding_size_rnn, output_dim = hidden_size_rnn_output
+        # encoder = GRUWithAttention(
+        #     input_size=args.max_prev_node,
+        #     hidden_size=args.hidden_size_rnn,
+        #     attn_size=args.embedding_size_rnn,      # dimension of the alignment network
+        #     output_size=args.hidden_size_rnn_output,
+        #     num_layers=args.num_layers
+        # ).cuda()
+        
+        encoder=GRU_plain(input_size=args.max_prev_node, 
+            embedding_size=args.embedding_size_rnn,
+            hidden_size=args.hidden_size_rnn, 
+            num_layers=args.num_layers, 
+            has_input=True,
+            has_output=True, 
+            output_size=args.hidden_size_rnn_output
+        ).cuda()
+
+        # Decoder: input_dim = 1, hidden_dim = hidden_size_rnn_output,
+        #           attention_dim = embedding_size_rnn_output, output_dim = 1
+        decoder = GRU_plain(input_size=1, embedding_size=args.embedding_size_rnn_output,
+                           hidden_size=args.hidden_size_rnn_output, num_layers=args.num_layers, has_input=True,
+                           has_output=True, output_size=1).cuda()
+    else:
+        encoder = GraphEncoder(input_dim=80, hidden_dim=args.hidden_size_rnn, 
+                            output_dim=args.hidden_size_rnn, num_layers=args.num_layers, 
+                                use_attention=False).cuda()
+        decoder = GRU_flat_dec_multihead(input_size=2, 
+                                    embedding_size=args.embedding_size_rnn,
+                                    hidden_size=args.hidden_size_rnn,
+                                    num_layers=args.num_layers,
+                                    edge_output_size=args.max_prev_node,
+                                    value_output_size=80).cuda()
+   
+    # # compute empirical p_data once (or just set p_data=0.17)
+    # p_data = 0.17
+    # import math
+    # logit_p = math.log(p_data/(1-p_data))
+    # # the last layer of your edge‑head MLP is decoder.output_edge[-1]
+    # decoder.output_edge[-1].bias.data.fill_(logit_p)
+    # print("edge‑head bias initialized so sigmoid(bias)=%.2f" % p_data)
+    # rnn = GRU_plain_dec(input_size=args.max_prev_node, embedding_size=args.embedding_size_rnn,
+    #                     hidden_size=args.hidden_size_rnn, num_layers=args.num_layers, has_input=True,
+    #                     has_output=True, output_size=80).cuda()
+    # output = GRU_plain_dec(input_size=1, embedding_size=args.embedding_size_rnn_output,
+    #                     hidden_size=args.hidden_size_rnn_output, num_layers=args.num_layers, has_input=True,
+    #                     has_output=True, output_size=1).cuda()    
 
     ### start training
 
-    train_dec(args, dataset_loader, dataset_test, encoder, rnn, output)
+    train(args, dataset_loader, encoder, decoder)
 
     ### graph completion
     # train_graph_completion(args,dataset_loader,rnn,output)

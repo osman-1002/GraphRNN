@@ -66,7 +66,7 @@ def create(args):
         c_sizes = np.random.choice([12, 13, 14, 15, 16, 17], num_communities)
         #c_sizes = [15] * num_communities
         for k in range(3000):
-            graphs.append(n_community(c_sizes, p_inter=0.01))
+            graphs.append(n_community(c_sizes, p_inter=0.005))
         args.max_prev_node = 80
     elif args.graph_type=='grid':
         graphs = []

@@ -230,6 +230,25 @@ def decode_adj(adj_output):
 
     return adj_full
 
+def n_decode_adj(adj_output):
+    """
+    adj_output: np.ndarray shape (N, max_prev)
+       row i = predicted 0/1 edges from node i to nodes [0..i-1], reversed.
+    Returns:
+       adj_full: np.ndarray shape (N, N)
+    """
+    N, M = adj_output.shape
+    adj = np.zeros((N, N), dtype=int)
+    for i in range(N):
+        # how many previous nodes could we have?
+        k = min(i, M)
+        if k > 0:
+            # last k entries of adj_output[i] correspond to edges to nodes 0..i-1, reversed
+            rev = adj_output[i, -k:][::-1]
+            adj[i, :k] = rev
+    # symmetrize
+    adj_full = adj + adj.T
+    return adj_full
 import numpy as np
 
 # def dec_decode_adj(output_seq, threshold=0.5, max_nodes=64):

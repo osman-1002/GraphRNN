@@ -15,7 +15,7 @@ import pickle
 import re
 import os
 import data
-
+import args
 def citeseer_ego():
     _, _, G = data.Graph_load(dataset='citeseer')
     G = max(nx.connected_component_subgraphs(G), key=len)
@@ -578,19 +578,19 @@ def test_perturbed():
 if __name__ == '__main__':
     #test_perturbed()
     
-    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community4_4_128_train_0.dat')
+    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community3_4_128_train_0.dat')
 
     
     for i in range(0, 160, 16):
-        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/train/community_DEC_' + str(i))
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/train/community3_DEC_' + str(i))
     
-    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community4_4_128_test_0.dat')
+    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community3_4_128_test_0.dat')
 
     
     for i in range(0, 160, 16):
-        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/test/community_DEC_' + str(i))
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/test/community3_DEC_' + str(i))
     
-    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community4_4_128_pred_3_1.dat')
+    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community3_4_128_pred_20.dat')
 
     for i in range(0, 160, 16):
-        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/pred/n_community_DEC_3_1_' + str(i))
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/pred/mz_community3_DEC_20_' + str(i))

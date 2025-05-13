@@ -14,19 +14,20 @@ class Args_evaluate():
         # loop over the settings
         # self.model_name_all = ['GraphRNN_MLP','GraphRNN_RNN','Internal','Noise']
         # self.model_name_all = ['E-R', 'B-A']
-        self.model_name_all = ['GraphRNN_RNN']
+        self.model_name_all = ['GraphRNN_DEC']
         # self.model_name_all = ['Baseline_DGMG']
 
         # list of dataset to evaluate
         # use a list of 1 element to evaluate a single dataset
-        self.dataset_name_all = ['caveman', 'grid', 'barabasi', 'citeseer', 'DD']
+        self.dataset_name_all = ['community4']
+        #self.dataset_name_all = ['caveman', 'grid', 'barabasi', 'citeseer', 'DD']
         # self.dataset_name_all = ['citeseer_small','caveman_small']
         # self.dataset_name_all = ['barabasi_noise0','barabasi_noise2','barabasi_noise4','barabasi_noise6','barabasi_noise8','barabasi_noise10']
         # self.dataset_name_all = ['caveman_small', 'ladder_small', 'grid_small', 'ladder_small', 'enzymes_small', 'barabasi_small','citeseer_small']
 
-        self.epoch_start=100
-        self.epoch_end=3001
-        self.epoch_step=100
+        self.epoch_start=1
+        self.epoch_end=11
+        self.epoch_step=1
 
 def find_nearest_idx(array,value):
     idx = (np.abs(array-value)).argmin()
@@ -320,7 +321,7 @@ def evaluation_epoch(dir_input, fname_output, model_name, dataset_name, args, is
             for epoch in range(epoch_start, epoch_end, epoch_step):
                 # get filename
                 fname_pred = dir_input + model_name + '_' + dataset_name + '_' + str(
-                    64) + '_pred_' + str(epoch) + '.dat'
+                    128) + '_pred_' + str(epoch) + '.dat'
                 # load graphs
                 try:
                     graph_pred = utils.load_graph_list(fname_pred, is_real=True)  # default False
@@ -679,7 +680,7 @@ if __name__ == '__main__':
     elif not prog_args.test_file == '':
         # evaluate single .dat file containing list of test graphs (networkx format)
         graphs = utils.load_graph_list(prog_args.test_file)
-        eval_single_list(graphs, dir_input=dir_prefix+'graphs/', dataset_name='grid')
+        eval_single_list(graphs, dir_input=dir_prefix+'graphs/', dataset_name='community4')
     ## if you don't try kronecker, only the following part is needed
     else:
         if not os.path.isdir(dir_prefix+'eval_results'):

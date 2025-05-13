@@ -15,6 +15,7 @@ class Args():
         # The dependent Bernoulli sequence version of GraphRNN
         #self.note = 'GraphRNN_RNN'
         self.note = 'GraphRNN_DEC'
+        #self.note = 'GraphRNN_ATT'
         ## for comparison, removing the BFS compoenent
         # self.note = 'GraphRNN_MLP_nobfs'
         # self.note = 'GraphRNN_RNN_nobfs'
@@ -24,7 +25,7 @@ class Args():
         # self.graph_type = 'caveman'
         # self.graph_type = 'caveman_small'
         # self.graph_type = 'caveman_small_single'
-        self.graph_type = 'community4'
+        self.graph_type = 'community3'
         #self.graph_type = 'grid'
         #self.graph_type = 'grid_small'
         # self.graph_type = 'ladder_small'
@@ -43,7 +44,7 @@ class Args():
         #     self.graph_type = self.graph_type+str(self.noise)
 
         # if none, then auto calculate
-        self.max_num_node = 60 # max number of nodes in a graph
+        self.max_num_node = None # max number of nodes in a graph
         self.max_prev_node = None # max previous node that looks back
 
         ### network config
@@ -53,25 +54,25 @@ class Args():
         else:
             self.parameter_shrink = 1
         self.hidden_size_rnn = int(128/self.parameter_shrink) # hidden size for main RNN
-        self.hidden_size_rnn_output = 128 # hidden size for output RNN
+        self.hidden_size_rnn_output = 16 # hidden size for output RNN
         self.embedding_size_rnn = int(64/self.parameter_shrink) # the size for LSTM input
-        self.embedding_size_rnn_output = 64 # the embedding size for output rnn
+        self.embedding_size_rnn_output = 8 # the embedding size for output rnn
         self.embedding_size_output = int(64/self.parameter_shrink) # the embedding size for output (VAE/MLP)
 
         self.batch_size = 32 # normal: 32, and the rest should be changed accordingly
         self.test_batch_size = 32
         self.test_total_size = 100
         self.num_layers = 4
-
+        self.lambda_mod = 0.2
         ### training config
         self.num_workers = 4 # num workers to load data, default 4
         self.batch_ratio = 32 # how many batches of samples per epoch, default 32, e.g., 1 epoch = 32 batches
-        self.epochs = 3 # now one epoch means self.batch_ratio x batch_size
-        self.epochs_test_start = 3
-        self.epochs_test = 3
-        self.epochs_save = 3
-
-        self.lr = 0.00005 * 3
+        self.epochs = 20 # now one epoch means self.batch_ratio x batch_size
+        self.epochs_test_start = 20
+        self.epochs_test = 20
+        self.epochs_save = 20
+        self.epochs_log = 1
+        self.lr = 0.00005 *2
         self.milestones = [400, 1000]
         self.lr_rate = 0.03
 

@@ -157,7 +157,7 @@ def gumbel_sigmoid(logits, temperature):
 # print(x)
 # print(y)
 
-def sample_sigmoid(y, sample=True, sample_time=1):
+def s_sample_sigmoid(y, sample=True, sample_time=1):
     if len(y.size()) == 2:
         y_thresh = torch.rand_like(y)
     elif len(y.size()) == 3:
@@ -171,41 +171,41 @@ def sample_sigmoid(y, sample=True, sample_time=1):
     else:
         return (y > 0.5).float()
 
-# def sample_sigmoid(y, sample, thresh=0.5, sample_time=2):
-#     '''
-#         do sampling over unnormalized score
-#     :param y: input
-#     :param sample: Bool
-#     :param thresh: if not sample, the threshold
-#     :param sampe_time: how many times do we sample, if =1, do single sample
-#     :return: sampled result
-#     '''
-#     if isinstance(y, tuple):
-#         y = y[0]  # Extract the first element if y is a tuple
-#     # do sigmoid first
-#     y = F.sigmoid(y)
-#     # do sampling
-#     if sample:
-#         if sample_time>1:
-#             y_result = Variable(torch.rand(y.size(0),y.size(1),y.size(2))).cuda()
-#             # loop over all batches
-#             for i in range(y_result.size(0)):
-#                 # do 'multi_sample' times sampling
-#                 for j in range(sample_time):
-#                     y_thresh = Variable(torch.rand(y.size(1), y.size(2))).cuda()
-#                     y_result[i] = torch.gt(y[i], y_thresh).float()
-#                     if (torch.sum(y_result[i]).data>0).any():
-#                         break
-#                     # else:
-#                     #     print('all zero',j)
-#         else:
-#             y_thresh = Variable(torch.rand(y.size(0),y.size(1),y.size(2))).cuda()
-#             y_result = torch.gt(y,y_thresh).float()
-#     # do max likelihood based on some threshold
-#     else:
-#         y_thresh = Variable(torch.ones(y.size(0), y.size(1), y.size(2))*thresh).cuda()
-#         y_result = torch.gt(y, y_thresh).float()
-#     return y_result
+def sample_sigmoid(y, sample, thresh=0.5, sample_time=2):
+    '''
+        do sampling over unnormalized score
+    :param y: input
+    :param sample: Bool
+    :param thresh: if not sample, the threshold
+    :param sampe_time: how many times do we sample, if =1, do single sample
+    :return: sampled result
+    '''
+    if isinstance(y, tuple):
+        y = y[0]  # Extract the first element if y is a tuple
+    # do sigmoid first
+    y = F.sigmoid(y)
+    # do sampling
+    if sample:
+        if sample_time>1:
+            y_result = Variable(torch.rand(y.size(0),y.size(1),y.size(2))).cuda()
+            # loop over all batches
+            for i in range(y_result.size(0)):
+                # do 'multi_sample' times sampling
+                for j in range(sample_time):
+                    y_thresh = Variable(torch.rand(y.size(1), y.size(2))).cuda()
+                    y_result[i] = torch.gt(y[i], y_thresh).float()
+                    if (torch.sum(y_result[i]).data>0).any():
+                        break
+                    # else:
+                    #     print('all zero',j)
+        else:
+            y_thresh = Variable(torch.rand(y.size(0),y.size(1),y.size(2))).cuda()
+            y_result = torch.gt(y,y_thresh).float()
+    # do max likelihood based on some threshold
+    else:
+        y_thresh = Variable(torch.ones(y.size(0), y.size(1), y.size(2))*thresh).cuda()
+        y_result = torch.gt(y, y_thresh).float()
+    return y_result
 
 def sample_sigmoid_attention(y, sample, thresh=0.5, sample_time=2):
     '''
@@ -709,6 +709,311 @@ class GRU_plain_dec(nn.Module):
 
         return output_seq, hidden.detach()
 
+class aGRU_flat_dec_multihead(nn.Module):
+    def __init__(self, input_size, embedding_size, hidden_size, num_layers, 
+                 edge_output_size, value_output_size, has_input=True):
+        super(GRU_flat_dec_multihead, self).__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.has_input = has_input
+
+        if has_input:
+            self.input = nn.Linear(input_size, embedding_size)
+            self.relu = nn.ReLU()
+
+        self.rnn = nn.GRU(input_size=embedding_size + hidden_size, 
+                          hidden_size=hidden_size, num_layers=num_layers, batch_first=True)
+
+        # Multi-head outputs
+        self.output_edge = nn.Sequential(
+            nn.Linear(hidden_size, embedding_size),
+            nn.ReLU(),
+            nn.Linear(embedding_size, edge_output_size)
+        )
+
+        self.output_value = nn.Sequential(
+            nn.Linear(hidden_size, embedding_size),
+            nn.ReLU(),
+            nn.Linear(embedding_size, value_output_size)
+        )
+
+        self._init_weights()
+
+    def _init_weights(self):
+        for name, param in self.rnn.named_parameters():
+            if 'bias' in name:
+                nn.init.constant_(param, 0.25)
+            elif 'weight' in name:
+                nn.init.xavier_uniform_(param, gain=nn.init.calculate_gain('sigmoid'))
+
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+
+    def init_hidden(self, graph_embedding):
+        return graph_embedding.expand(self.num_layers, -1, -1).contiguous()
+
+    
+    def forward(self, edge_seq, graph_embedding, hidden=None, pack=False, input_len=None):
+        # 1) cuDNN-friendly flatten
+        self.rnn.flatten_parameters()
+
+        # 2) Hidden‐state init if needed
+        if hidden is None:
+            hidden = self.init_hidden(graph_embedding)  # [num_layers, B, H]
+
+        # 3) Unpack or treat raw
+        if pack:
+            # if already packed, unpack it first
+            if isinstance(edge_seq, PackedSequence):
+                seq_unpacked, seq_lengths = pad_packed_sequence(edge_seq, batch_first=True)
+            else:
+                assert input_len is not None, "Must provide input_len when pack=True"
+                seq_unpacked, seq_lengths = edge_seq, input_len
+        else:
+            seq_unpacked, seq_lengths = edge_seq, None  # no packing
+
+        B, T, feat = seq_unpacked.size()
+        assert feat == self.input.in_features, \
+            f"Expected feature dim {self.input.in_features}, got {feat}"
+
+        # 4) Input embedding
+        flat = self.relu(self.input(seq_unpacked.reshape(-1, feat)))
+        embedded = flat.view(B, T, -1)
+
+        # 5) Graph‐context expansion
+        if graph_embedding.dim() == 2:
+            graph_embedding = graph_embedding.unsqueeze(0)  # [1, B, H]
+        context = graph_embedding[-1].unsqueeze(1).expand(B, T, -1)
+
+        # 6) Concatenate and (optionally) pack
+        rnn_in = torch.cat([embedded, context], dim=-1)
+        if pack:
+            rnn_in = pack_padded_sequence(rnn_in, seq_lengths, batch_first=True, enforce_sorted=True)
+
+        # 7) GRU forward
+        out, hidden = self.rnn(rnn_in, hidden)
+
+        # 8) Unpack if needed
+        if pack:
+            out, _ = pad_packed_sequence(out, batch_first=True)
+
+        # 9) Multi‐head projections
+        edge_logits = self.output_edge(out)      # [B, T, edge_output_size]
+        value_preds = self.output_value(out)     # [B, T, value_output_size]
+
+        # 10) Re‐pack outputs, if in training mode
+        if pack:
+            packed_logits = pack_padded_sequence(edge_logits, seq_lengths, batch_first=True, enforce_sorted=True)
+            packed_values = pack_padded_sequence(value_preds, seq_lengths, batch_first=True, enforce_sorted=True)
+            return packed_logits, packed_values, hidden
+
+        # 11) Generation mode: return raw logits
+        return edge_logits, value_preds, hidden
+    
+    # def forward(self, edge_seq, graph_embedding, hidden=None, pack=False, input_len=None):
+    #     # 1) flatten for cuDNN
+    #     self.rnn.flatten_parameters()
+    #     # do:
+    #     if hidden is None:
+    #         hidden = self.init_hidden(graph_embedding)
+    #     # 2) unpack or use raw
+    #     if isinstance(edge_seq, PackedSequence):
+    #         seq_unpacked, seq_lengths = pad_packed_sequence(edge_seq, batch_first=True)
+    #     else:
+    #         assert input_len is not None
+    #         seq_unpacked, seq_lengths = edge_seq, input_len
+
+    #     B, T, feat = seq_unpacked.size()
+    #     assert feat == self.input.in_features
+
+    #     # 3) embed edges
+    #     flat = self.relu(self.input(seq_unpacked.view(-1, feat)))
+    #     embedded = flat.view(B, T, -1)
+
+    #     # 4) expand graph embedding
+    #     if graph_embedding.dim() == 2:
+    #         graph_embedding = graph_embedding.unsqueeze(0)
+    #     context = graph_embedding[-1].unsqueeze(1).expand(B, T, -1)
+
+    #     # 5) concat & pack
+    #     rnn_in = torch.cat([embedded, context], dim=-1)
+    #     packed_in = pack_padded_sequence(rnn_in, seq_lengths, batch_first=True, enforce_sorted=True)
+
+    #     # 6) forward GRU
+    #     packed_out, hidden = self.rnn(packed_in, hidden)
+
+    #     # 7) unpack & project
+    #     out, _ = pad_packed_sequence(packed_out, batch_first=True)
+    #     edge_logits = self.output_edge(out)
+    #     value_preds = self.output_value(out)
+
+    #     # 8) repack if needed
+    #     packed_logits = pack_padded_sequence(edge_logits, seq_lengths, batch_first=True, enforce_sorted=True)
+    #     packed_values = pack_padded_sequence(value_preds, seq_lengths, batch_first=True, enforce_sorted=True)
+
+    #     return packed_logits, packed_values, hidden
+
+class GRU_flat_dec_multihead(nn.Module):
+    def __init__(self, input_size, embedding_size, hidden_size, num_layers,
+                 edge_output_size, value_output_size, has_input=True):
+        super().__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.has_input = has_input
+
+        if has_input:
+            self.input = nn.Linear(input_size, embedding_size)
+            self.relu = nn.ReLU()
+
+        self.rnn = nn.GRU(input_size=embedding_size + hidden_size,
+                          hidden_size=hidden_size,
+                          num_layers=num_layers,
+                          batch_first=True)
+
+        self.output_edge = nn.Sequential(
+            nn.Linear(hidden_size, embedding_size),
+            nn.ReLU(),
+            nn.Linear(embedding_size, edge_output_size)
+        )
+        self.output_value = nn.Sequential(
+            nn.Linear(hidden_size, embedding_size),
+            nn.ReLU(),
+            nn.Linear(embedding_size, value_output_size)
+        )
+        self._init_weights()
+
+    def _init_weights(self):
+        for n, p in self.rnn.named_parameters():
+            if 'bias' in n:
+                nn.init.constant_(p, 0.17)
+            else:
+                nn.init.xavier_uniform_(p, gain=nn.init.calculate_gain('sigmoid'))
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+        
+    def init_hidden(self, graph_embedding):
+        # graph_embedding: [B, H] → hidden: [num_layers, B, H]
+        return graph_embedding.unsqueeze(0).expand(self.num_layers, -1, -1).contiguous()
+
+    def forward(self, edge_seq, graph_embedding, hidden=None, pack=False, input_len=None):
+        # 1) cuDNN
+        self.rnn.flatten_parameters()
+
+        # 2) hidden init
+        if hidden is None:
+            hidden = self.init_hidden(graph_embedding)
+
+        # 3) unpack/pack logic
+        if pack:
+            if isinstance(edge_seq, PackedSequence):
+                seq_unpacked, seq_lengths = pad_packed_sequence(edge_seq, batch_first=True)
+            else:
+                assert input_len is not None, "Need input_len when pack=True"
+                seq_unpacked, seq_lengths = edge_seq, input_len
+        else:
+            seq_unpacked, seq_lengths = edge_seq, None
+
+        B, T, feat = seq_unpacked.size()
+        assert feat == self.input.in_features, f"Expected feat={self.input.in_features}, got {feat}"
+
+        # 4) embed inputs
+        flat = self.relu(self.input(seq_unpacked.view(-1, feat)))
+        embedded = flat.view(B, T, -1)
+
+        # 5) expand context
+        if graph_embedding.dim() == 2:
+            graph_embedding = graph_embedding.unsqueeze(0)
+        context = graph_embedding[-1].unsqueeze(1).expand(B, T, -1)
+
+        # 6) concat + optional pack
+        rnn_in = torch.cat([embedded, context], dim=-1)
+        if pack:
+            rnn_in = pack_padded_sequence(rnn_in, seq_lengths, batch_first=True, enforce_sorted=True)
+
+        # 7) GRU
+        out, hidden = self.rnn(rnn_in, hidden)
+
+        # 8) unpack if needed
+        if pack:
+            out, _ = pad_packed_sequence(out, batch_first=True)
+
+        # 9) project
+        edge_logits = self.output_edge(out)       # [B, T, E_prev]
+        value_preds = self.output_value(out)      # [B, T, 1]
+
+        if pack:
+            pl = pack_padded_sequence(edge_logits, seq_lengths, batch_first=True, enforce_sorted=True)
+            pv = pack_padded_sequence(value_preds, seq_lengths, batch_first=True, enforce_sorted=True)
+            return pl, pv, hidden
+
+        return edge_logits, value_preds, hidden
+   
+    
+    
+class GRUWithAttention(nn.Module):
+    """
+    A GRU decoder with Bahdanau-style (additive) attention.
+    """
+    def __init__(self, input_size, hidden_size, attn_size, output_size, num_layers=1):
+        super().__init__()
+        # store these so init_hidden works
+        self.num_layers   = num_layers
+        self.hidden_size  = hidden_size
+        # GRU cell for decoder
+        self.gru = nn.GRU(input_size + hidden_size, hidden_size,
+                          num_layers=num_layers, batch_first=True)  # :contentReference[oaicite:4]{index=4}
+
+        # Attention: score = v^T tanh(W_a [dec_hidden; enc_outputs])
+        self.attn = nn.Linear(hidden_size * 2, attn_size)            # :contentReference[oaicite:5]{index=5}
+        self.v = nn.Linear(attn_size, 1, bias=False)
+
+        # Final output projection
+        self.out = nn.Linear(hidden_size * 2, output_size)
+
+    def init_hidden(self, batch_size, device=None):
+        """
+        Initialize hidden state to zeros.
+        Returns: tensor of shape (num_layers, batch_size, hidden_size)
+        """
+        if device is None:
+            device = next(self.parameters()).device
+        return torch.zeros(self.num_layers, batch_size, self.hidden_size,
+                        device=device)
+    
+    def forward(self, dec_input, hidden, encoder_outputs, mask):
+        """
+        dec_input:    (batch, 1, input_size) — current step input
+        hidden:       (num_layers, batch, hidden_size) — previous decoder hidden
+        encoder_outputs: (batch, seq_len, hidden_size) — all encoder states
+        mask:         (batch, seq_len) — 1 for valid, 0 for padding
+        """
+        # 1) Compute attention scores :contentReference[oaicite:6]{index=6}
+        #    Expand decoder hidden to compare with every encoder time step
+        dec_h = hidden[-1].unsqueeze(1).repeat(1, encoder_outputs.size(1), 1)
+        energy = torch.tanh(self.attn(torch.cat([dec_h, encoder_outputs], dim=2)))
+        scores = self.v(energy).squeeze(2)  # (batch, seq_len)
+
+        # 2) Mask padding positions and normalize :contentReference[oaicite:7]{index=7}
+        scores = scores.masked_fill(mask == 0, float('-inf'))
+        attn_weights = F.softmax(scores, dim=1)  # (batch, seq_len)
+
+        # 3) Compute context vector as weighted sum :contentReference[oaicite:8]{index=8}
+        context = torch.bmm(attn_weights.unsqueeze(1), encoder_outputs)
+        #    context: (batch, 1, hidden_size)
+
+        # 4) Concatenate input and context, run through GRU
+        gru_input = torch.cat([dec_input, context], dim=2)
+        output, hidden = self.gru(gru_input, hidden)  # (batch, 1, hidden)
+
+        # 5) Predict next token / edge logits
+        output = torch.cat([output, context], dim=2)   # (batch, 1, hidden*2)
+        output = self.out(output)                      # :contentReference[oaicite:9]{index=9}
+
+        return output, hidden, attn_weights    
+    
+    
 class Attention(nn.Module):
     def __init__(self, hidden_size):
         super(Attention, self).__init__()
@@ -722,6 +1027,7 @@ class Attention(nn.Module):
         Returns:
         context_vector: Weighted sum of RNN outputs (batch_size, hidden_size)
         """
+        
         if isinstance(rnn_output, PackedSequence):
             rnn_output, _ = pad_packed_sequence(rnn_output, batch_first=True)
 
