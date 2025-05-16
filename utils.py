@@ -1,3 +1,5 @@
+from collections import deque
+
 import networkx as nx
 import numpy as np
 import torch
@@ -16,6 +18,8 @@ import re
 import os
 import data
 import args
+
+
 def citeseer_ego():
     _, _, G = data.Graph_load(dataset='citeseer')
     G = max(nx.connected_component_subgraphs(G), key=len)
@@ -106,7 +110,6 @@ def perturb(graph_list, p_del, p_add=None):
 
         perturbed_graph_list.append(G)
     return perturbed_graph_list
-
 
 
 def perturb_new(graph_list, p):
@@ -302,7 +305,10 @@ def draw_graph_list(G_list, row, col, fname='figures/test', layout='spring', is_
         # Ensure that the graph has nodes and edges to prevent errors in layout calculations
         if G.number_of_nodes() > 0:
             if layout == 'spring':
-                pos = nx.spring_layout(G, k=k/np.sqrt(G.number_of_nodes()), iterations=100)
+                #Enes
+                #çıkarıldıpos = nx.spring_layout(G, k=k/np.sqrt(G.number_of_nodes()), iterations=100)
+                pos = nx.spring_layout(G, k=2 / np.sqrt(G.number_of_nodes()), iterations=100)
+                ##EnesSon
             elif layout == 'spectral':
                 pos = nx.spectral_layout(G)
             # Graph is drawn
@@ -539,6 +545,33 @@ def load_graph_list(fname, is_real=True):
 
     return graph_list
 
+####Enes
+def analyze_graph_stats(graphs, label=""):
+    modularities = []
+    clusterings = []
+    num_components = []
+
+    for G in graphs:
+        if G.number_of_nodes() < 2:
+            continue  # Küçük veya boş grafikleri atla
+
+        try:
+            part = community.best_partition(G)
+            mod = community.modularity(part, G)
+            modularities.append(mod)
+        except:
+            pass  # Eğer partition başarısızsa mod eklenmez
+
+        clusterings.append(nx.average_clustering(G))
+        num_components.append(nx.number_connected_components(G))
+
+    print(f"--- {label} ---")
+    print(f"Avg modularity: {np.mean(modularities):.4f} (n={len(modularities)})")
+    print(f"Avg clustering: {np.mean(clusterings):.4f} (n={len(clusterings)})")
+    print(f"Avg #components: {np.mean(num_components):.2f}")
+    print()
+
+###Enes Son
 
 def export_graphs_to_txt(g_list, output_filename_prefix):
     i = 0
@@ -578,19 +611,26 @@ def test_perturbed():
 if __name__ == '__main__':
     #test_perturbed()
     
-    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community3_4_128_train_0.dat')
-
+    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_train_0.dat')
+    print(f"Loaded {len(graphs)} graphs")
     
     for i in range(0, 160, 16):
-        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/train/community3_DEC_' + str(i))
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/train/train_community2_DEC_' + str(i))
     
-    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community3_4_128_test_0.dat')
-
+    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_test_0.dat')
+    print(f"Loaded {len(graphs)} graphs")
     
     for i in range(0, 160, 16):
-        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/test/community3_DEC_' + str(i))
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/test/test_community2_DEC_' + str(i))
     
-    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community3_4_128_pred_20.dat')
+    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_pred_20.dat')
+    print(f"Loaded {len(graphs)} graphs")
 
     for i in range(0, 160, 16):
-        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/pred/mz_community3_DEC_20_' + str(i))
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/pred/pred_community2_DEC_20_' + str(i))
+
+    graphs_train = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_train_0.dat')
+    analyze_graph_stats(graphs_train, label="TRAIN")
+
+    graphs_pred = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_pred_20.dat')
+    analyze_graph_stats(graphs_pred, label="PRED")

@@ -63,11 +63,15 @@ def create(args):
     elif args.graph_type.startswith('community'):
         num_communities = int(args.graph_type[-1])
         print('Creating dataset with ', num_communities, ' communities')
-        c_sizes = np.random.choice([12, 13, 14, 15, 16, 17], num_communities)
+        c_sizes = np.random.choice([12, 13, 14, 15, 16, 17], num_communities) * 2
         #c_sizes = [15] * num_communities
         for k in range(3000):
-            graphs.append(n_community(c_sizes, p_inter=0.005))
-        args.max_prev_node = 80
+            ##Enes
+            #çıkarıldı graphs.append(n_community(c_sizes, p_inter=0.005))
+            graphs.append(n_community(c_sizes, p_inter=0.01))
+            args.max_prev_node = 80
+            ##EnesSon
+
     elif args.graph_type=='grid':
         graphs = []
         for i in range(10,20):

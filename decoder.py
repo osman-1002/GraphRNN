@@ -49,7 +49,9 @@ class GraphRNNDecoder(nn.Module):
 
         return torch.cat(generated_nodes, dim=-1), torch.stack(generated_edges)
 
-# Example usage
+
+
+
 if __name__ == "__main__":
     batch_size = 4
     encoder_output = torch.randn(batch_size, 128)  # Fake encoder output

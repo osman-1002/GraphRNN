@@ -25,7 +25,7 @@ class Args():
         # self.graph_type = 'caveman'
         # self.graph_type = 'caveman_small'
         # self.graph_type = 'caveman_small_single'
-        self.graph_type = 'community3'
+        self.graph_type = 'community2'
         #self.graph_type = 'grid'
         #self.graph_type = 'grid_small'
         # self.graph_type = 'ladder_small'
@@ -61,9 +61,10 @@ class Args():
 
         self.batch_size = 32 # normal: 32, and the rest should be changed accordingly
         self.test_batch_size = 32
-        self.test_total_size = 100
+        self.test_total_size = 300
         self.num_layers = 4
-        self.lambda_mod = 0.2
+        ##self.lambda_mod = 0.2
+        self.lambda_mod = 2.5
         ### training config
         self.num_workers = 4 # num workers to load data, default 4
         self.batch_ratio = 32 # how many batches of samples per epoch, default 32, e.g., 1 epoch = 32 batches

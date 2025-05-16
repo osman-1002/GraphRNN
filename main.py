@@ -1,5 +1,6 @@
 from train import *
 from encoder import GraphEncoder
+from decoder import GraphRNNDecoder
 
 if __name__ == '__main__':
     # All necessary arguments are defined in args.py
@@ -157,16 +158,18 @@ if __name__ == '__main__':
                            hidden_size=args.hidden_size_rnn_output, num_layers=args.num_layers, has_input=True,
                            has_output=True, output_size=1).cuda()
     else:
-        encoder = GraphEncoder(input_dim=80, hidden_dim=args.hidden_size_rnn, 
+        encoder = GraphEncoder(input_dim=80, hidden_dim=args.hidden_size_rnn,
                             output_dim=args.hidden_size_rnn, num_layers=args.num_layers, 
                                 use_attention=False).cuda()
-        decoder = GRU_flat_dec_multihead(input_size=2, 
+
+        decoder = GRU_flat_dec_multihead(input_size=2,
                                     embedding_size=args.embedding_size_rnn,
                                     hidden_size=args.hidden_size_rnn,
                                     num_layers=args.num_layers,
                                     edge_output_size=args.max_prev_node,
                                     value_output_size=80).cuda()
-   
+
+
     # # compute empirical p_data once (or just set p_data=0.17)
     # p_data = 0.17
     # import math

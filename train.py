@@ -21,13 +21,13 @@ from tensorboard_logger import configure, log_value
 import scipy.misc
 import time as tm
 import datetime
-from utils import *
+# from utils import *
 from model import *
 from data import *
 from args import Args
 import create_graphs
 import random
-from graph_model import GraphGenModel
+# from graph_model import GraphGenModel
 from torch_geometric.data import Data
 from collections import deque
 
@@ -736,8 +736,6 @@ def rnn_forward_train_multihead(
 
 
 
-
-
 def train_attention_epoch(epoch, args, encoder, decoder, data_loader,
                           opt_enc, opt_dec, sched_enc, sched_dec):
     encoder.train(); decoder.train()
@@ -944,6 +942,11 @@ def train_dec_epoch(epoch, args, encoder, decoder, data_loader,
     bce_loss = nn.BCEWithLogitsLoss()
     total_loss = 0.0
     total_elems = 0
+
+    ##Enes
+    bce_sum = 0.0
+    mod_sum = 0.0
+    ##EnesSon
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
     for batch_idx, data in enumerate(data_loader):
@@ -1014,7 +1017,15 @@ def train_dec_epoch(epoch, args, encoder, decoder, data_loader,
             loss_mod = - Q.mean()
 
             # Combine
-            loss = loss_bce + args.lambda_mod * loss_mod
+            ##Enes
+            ## çıkarıldı loss = loss_bce + args.lambda_mod * loss_mod
+            loss = loss_bce + args.lambda_mod * (loss_mod ** 2)
+            ##EnesSon
+            bce_sum += loss_bce.item() * lens_tensor.sum().item()
+            mod_sum += loss_mod.item() * lens_tensor.sum().item()
+
+            print(
+                f"Epoch {epoch} | BCE: {loss_bce.item():.4f} | ModLoss: {loss_mod.item():.4f} | Total: {loss.item():.4f}")
             
 
         # 9) Backpropagate and step optimizers + schedulers
@@ -1033,6 +1044,10 @@ def train_dec_epoch(epoch, args, encoder, decoder, data_loader,
         # Optional logging
         if batch_idx == 0 and epoch % args.epochs_log == 0:
             print(f"Epoch {epoch}/{args.epochs} | Batch {batch_idx} | Loss: {loss.item():.6f}")
+
+    print(f"[Epoch {epoch}] Avg BCE Loss: {bce_sum / total_elems:.4f} | "
+          f"Avg Modularity Loss: {mod_sum / total_elems:.4f} | "
+          f"Avg Total Loss: {total_loss / total_elems:.4f}")
 
     return total_loss / total_elems
 
@@ -1088,8 +1103,14 @@ def test_dec_epoch(args, encoder, decoder, data_loader):
                     sharp_logits = last_logits / t
                     # --- key change: use plain sigmoid + 0.5 threshold ---
                     probs  = torch.sigmoid(sharp_logits)      # logistic sigmoid :contentReference[oaicite:3]{index=3}
-                    p_pos = 0.7   # keep fairly strong intra-block edges  
-                    p_neg = 0.2   # allow a few inter-block edges  
+                    ###Enes
+                    #p_pos = 0.7   # keep fairly strong intra-block edges
+                    p_pos = 0.8   # keep fairly strong intra-block edges
+                    # p_neg = 0.2   # allow a few inter-block edges
+                    p_neg = 0.3   # allow a few inter-block edges
+                    ###Enes Son
+
+
                     sample = torch.where(
                         probs > p_pos, torch.ones_like(probs),
                         torch.where(probs < p_neg, torch.zeros_like(probs),

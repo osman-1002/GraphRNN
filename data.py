@@ -610,8 +610,13 @@ def custom_collate(batch):
                               batch_first=True, padding_value=0)  # → (B, T, in_dim)
     labels    = pad_sequence([item['y']        for item in batch],
                               batch_first=True, padding_value=0)  # → (B, T, out_dim)
-    lengths   = torch.tensor([item['len']    for item in batch], dtype=torch.long)
 
+    lengths   = torch.tensor([item['len']    for item in batch], dtype=torch.long)
+    ##Enes
+    # lengths = torch.tensor(
+    #     [item['len'].item() if isinstance(item['len'], torch.Tensor) else item['len'] for item in batch],
+    #     dtype=torch.long)
+    #EnesSon
     return {
       'x':          batched_graph.x,
       'edge_index': batched_graph.edge_index,
@@ -692,7 +697,7 @@ class Graph_sequence_sampler_pytorch(torch.utils.data.Dataset):
         adj_copy = adj_copy[np.ix_(x_idx, x_idx)]
         adj_copy_matrix = np.asmatrix(adj_copy)
         G = nx.from_numpy_matrix(adj_copy_matrix)
-        
+
         # Then do BFS in the permuted G
         start_idx = np.random.randint(adj_copy.shape[0])
         x_idx = np.array(bfs_seq(G, start_idx))
@@ -702,10 +707,10 @@ class Graph_sequence_sampler_pytorch(torch.utils.data.Dataset):
         # Get x and y and adj
         y_batch[0:adj_encoded.shape[0], :] = adj_encoded
         x_batch[1:adj_encoded.shape[0] + 1, :] = adj_encoded
-        
+
         # Generate edge_index (convert graph to sparse edge representation)
         edge_index = np.array(list(G.edges())).T  # Get edges from the graph as a numpy array
-        
+
         edge_index = torch.tensor(edge_index, dtype=torch.long)  # Convert to torch tensor
         edge_index = edge_index.contiguous()  # Ensure contiguous memory layout
 
@@ -714,7 +719,7 @@ class Graph_sequence_sampler_pytorch(torch.utils.data.Dataset):
         # Generate edge_seq (This is a sequence of edges, possibly from BFS traversal)
         edge_seq = self.generate_edge_sequence(G)
         edge_seq = torch.tensor(edge_seq, dtype=torch.long)  # Convert to tensor
-        
+
         return {
             'x': torch.tensor(x_batch, dtype=torch.float32),
             'y': torch.tensor(y_batch, dtype=torch.float32),
@@ -722,7 +727,7 @@ class Graph_sequence_sampler_pytorch(torch.utils.data.Dataset):
             'edge_index': edge_index.clone().detach(),#torch.tensor(edge_index, dtype=torch.long),  # Assuming it contains indices
             'batch': batch.clone().detach(), #torch.tensor(batch, dtype=torch.long),  # Assuming it contains indices
             'edge_seq': edge_seq.clone().detach() #torch.tensor(edge_seq, dtype=torch.float32)  # Adjust dtype based on your data
-            
+
         }
 
     def generate_edge_sequence(self, G):
