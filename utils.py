@@ -20,6 +20,7 @@ import data
 import args
 
 
+
 def citeseer_ego():
     _, _, G = data.Graph_load(dataset='citeseer')
     G = max(nx.connected_component_subgraphs(G), key=len)
@@ -608,6 +609,46 @@ def test_perturbed():
     print([g.number_of_edges() for g in graphs])
     print([g.number_of_edges() for g in g_perturbed])
 
+##Drew first graph step by step
+def draw_graph_stages(graph, num_stages=4, fname="figures/stages/stage"):
+    """
+    Grafın oluşum sürecini aşamalı olarak çizer ve tek bir görsele kaydeder.
+
+    Args:
+        graph: networkx.Graph objesi (tam hali).
+        num_stages: Kaç aşamada graf çizilecek (varsayılan: 4).
+        fname: Kaydedilecek görselin dosya adı (uzantısız).
+    """
+    if not os.path.exists(os.path.dirname(fname)):
+        os.makedirs(os.path.dirname(fname))
+
+    plt.switch_backend('agg')
+    plt.figure(figsize=(4 * num_stages, 4))
+
+    all_nodes = list(graph.nodes())
+    nodes_per_stage = len(all_nodes) // num_stages
+
+    for i in range(num_stages):
+        plt.subplot(1, num_stages, i + 1)
+        plt.axis("off")
+
+        end_index = (i + 1) * nodes_per_stage if i < num_stages - 1 else len(all_nodes)
+        stage_nodes = all_nodes[:end_index]
+        G_sub = graph.subgraph(stage_nodes).copy()
+
+        if G_sub.number_of_nodes() == 0:
+            continue
+
+        pos = nx.spring_layout(G_sub, k=2 / np.sqrt(G_sub.number_of_nodes()), iterations=100)
+        nx.draw_networkx_nodes(G_sub, pos, node_size=40, node_color='#336699', alpha=0.9)
+        nx.draw_networkx_edges(G_sub, pos, alpha=0.4, width=0.6)
+        plt.title(f"Stage {i + 1}\n{G_sub.number_of_nodes()} nodes")
+
+    plt.tight_layout()
+    plt.savefig(fname + ".png", dpi=300)
+    plt.close()
+
+
 if __name__ == '__main__':
     #test_perturbed()
     
@@ -634,3 +675,6 @@ if __name__ == '__main__':
 
     graphs_pred = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_pred_20.dat')
     analyze_graph_stats(graphs_pred, label="PRED")
+
+    graphs = load_graph_list("graphs/GraphRNN_DEC_community2_4_128_pred_20.dat")
+    draw_graph_stages(graphs[0], num_stages=4, fname="figures/stages/example_pred0")
