@@ -610,13 +610,8 @@ def custom_collate(batch):
                               batch_first=True, padding_value=0)  # → (B, T, in_dim)
     labels    = pad_sequence([item['y']        for item in batch],
                               batch_first=True, padding_value=0)  # → (B, T, out_dim)
-
     lengths   = torch.tensor([item['len']    for item in batch], dtype=torch.long)
-    ##Enes
-    # lengths = torch.tensor(
-    #     [item['len'].item() if isinstance(item['len'], torch.Tensor) else item['len'] for item in batch],
-    #     dtype=torch.long)
-    #EnesSon
+
     return {
       'x':          batched_graph.x,
       'edge_index': batched_graph.edge_index,
@@ -664,7 +659,69 @@ def custom_collate(batch):
 #         'edge_seq': edge_seq,
 #         'len': lengths
 #     }
+class deadGraph_sequence_sampler_pytorch(torch.utils.data.Dataset):
+    def __init__(self, graph_list, max_num_node, max_prev_node):
+        self.graph_list = graph_list
+        self.n_graphs = len(graph_list)
+        self.max_num_nodes = max_num_node
+        self.max_prev_node = max_prev_node
 
+    def __len__(self):
+        return self.n_graphs
+
+    def __getitem__(self, idx):
+        G_orig = self.graph_list[idx]
+        adj_orig = nx.to_numpy_matrix(G_orig)
+        n = adj_orig.shape[0]
+
+        # 1. Random permutation
+        perm = np.random.permutation(n)
+        adj_perm = adj_orig[np.ix_(perm, perm)]
+
+        # 2. BFS ordering on permuted graph
+        G_perm = nx.from_numpy_matrix(adj_perm)
+        start_idx = np.random.randint(n)
+        bfs_order = list(nx.bfs_tree(G_perm, source=start_idx).nodes())
+
+        # 3. Reorder adjacency by BFS
+        adj_bfs = adj_perm[np.ix_(bfs_order, bfs_order)]
+
+        # 4. Encode adjacency for RNN
+        adj_encoded = self.encode_adj(adj_bfs, self.max_prev_node)
+        max_len = self.max_num_nodes
+        x_batch = torch.zeros((max_len, self.max_prev_node))
+        y_batch = torch.zeros((max_len, self.max_prev_node))
+        length = len(adj_encoded)
+        if length >= max_len:
+            adj_encoded = adj_encoded[:max_len - 1]
+            length = len(adj_encoded)
+
+        y_batch[:length] = torch.tensor(adj_encoded[:length], dtype=torch.float32)
+        x_batch[1:length + 1] = torch.tensor(adj_encoded[:length], dtype=torch.float32)
+
+        # 5. Generate edge sequence from BFS-reordered graph
+        G_bfs = nx.from_numpy_matrix(adj_bfs)
+        edge_seq = torch.tensor(list(G_bfs.edges()), dtype=torch.long)
+
+        return x_batch, y_batch, length, edge_seq
+
+    def encode_adj(self, adj, max_prev_node):
+        """Encode adjacency matrix into a sequence for GraphRNN."""
+        num_nodes = adj.shape[0]
+        adj_seq = []
+        for i in range(num_nodes):
+            if i == 0:
+                adj_seq.append(np.zeros(max_prev_node))
+                continue
+            # Take connections to previous nodes only
+            prev_conn = adj[i, :i]
+            if len(prev_conn) > max_prev_node:
+                prev_conn = prev_conn[-max_prev_node:]
+            padded = np.zeros(max_prev_node)
+            padded[-len(prev_conn):] = prev_conn
+            adj_seq.append(padded)
+        return adj_seq
+    
 class Graph_sequence_sampler_pytorch(torch.utils.data.Dataset):
     def __init__(self, G_list, max_num_node=None, max_prev_node=None, iteration=20000):
         self.adj_all = []
@@ -687,47 +744,49 @@ class Graph_sequence_sampler_pytorch(torch.utils.data.Dataset):
         return len(self.adj_all)
 
     def __getitem__(self, idx):
-        adj_copy = self.adj_all[idx].copy()
-        x_batch = np.zeros((self.n, self.max_prev_node))  # here zeros are padded for small graph
-        x_batch[0,:] = 1  # the first input token is all ones
-        y_batch = np.zeros((self.n, self.max_prev_node))  # here zeros are padded for small graph
-        # generate input x, y pairs
-        len_batch = adj_copy.shape[0]
-        x_idx = np.random.permutation(adj_copy.shape[0])
-        adj_copy = adj_copy[np.ix_(x_idx, x_idx)]
-        adj_copy_matrix = np.asmatrix(adj_copy)
-        G = nx.from_numpy_matrix(adj_copy_matrix)
+        # 0) Original adjacency matrix and its size
+        adj_orig = self.adj_all[idx]          # shape (n,n)
+        n = adj_orig.shape[0]
+        len_batch = n
 
-        # Then do BFS in the permuted G
-        start_idx = np.random.randint(adj_copy.shape[0])
-        x_idx = np.array(bfs_seq(G, start_idx))
-        adj_copy = adj_copy[np.ix_(x_idx, x_idx)]
-        adj_encoded = encode_adj(adj_copy.copy(), max_prev_node=self.max_prev_node)
+        # 1) Random permutation of the nodes
+        perm1 = np.random.permutation(n)
+        A1    = adj_orig[np.ix_(perm1, perm1)]  # permuted adjacency
 
-        # Get x and y and adj
-        y_batch[0:adj_encoded.shape[0], :] = adj_encoded
-        x_batch[1:adj_encoded.shape[0] + 1, :] = adj_encoded
+        # 2) BFS reordering on that permuted graph
+        G1        = nx.from_numpy_matrix(np.asmatrix(A1))
+        start_idx = np.random.randint(n)
+        bfs_order = np.array(bfs_seq(G1, start_idx), dtype=int)
+        A_bfs     = A1[np.ix_(bfs_order, bfs_order)]
 
-        # Generate edge_index (convert graph to sparse edge representation)
-        edge_index = np.array(list(G.edges())).T  # Get edges from the graph as a numpy array
+        # 3) Encode adjacency into x/y for the RNN
+        adj_encoded = encode_adj(A_bfs.copy(), max_prev_node=self.max_prev_node)
+        T = adj_encoded.shape[0]                # actual time‐steps
 
-        edge_index = torch.tensor(edge_index, dtype=torch.long)  # Convert to torch tensor
-        edge_index = edge_index.contiguous()  # Ensure contiguous memory layout
+        # prepare padded x_batch, y_batch
+        x_batch = np.zeros((self.n, self.max_prev_node), dtype=np.float32)
+        y_batch = np.zeros((self.n, self.max_prev_node), dtype=np.float32)
+        x_batch[0, :] = 1
+        y_batch[:T, :] = adj_encoded
+        x_batch[1:T+1, :] = adj_encoded
 
-        # Generate batch info (assuming each graph is treated as a separate batch)
-        batch = torch.zeros(len(G.nodes()), dtype=torch.long)  # All nodes belong to a single graph in this batch
-        # Generate edge_seq (This is a sequence of edges, possibly from BFS traversal)
-        edge_seq = self.generate_edge_sequence(G)
-        edge_seq = torch.tensor(edge_seq, dtype=torch.long)  # Convert to tensor
+        # 4) Build edge_index (for GNN) and edge_seq (for RNN) on BFS graph
+        G_bfs = nx.from_numpy_matrix(np.asmatrix(A_bfs))
+        edge_list = [[u, v] for u, v in G_bfs.edges()]  # uses BFS node labels 0..n-1
+
+        edge_index = torch.tensor(edge_list, dtype=torch.long).T.contiguous()
+        edge_seq   = torch.tensor(edge_list, dtype=torch.long)
+
+        # 5) Batch vector for PyG (all zeros since single graph)
+        batch = torch.zeros(T, dtype=torch.long)
 
         return {
-            'x': torch.tensor(x_batch, dtype=torch.float32),
-            'y': torch.tensor(y_batch, dtype=torch.float32),
-            'len': torch.tensor([len_batch], dtype=torch.long),  # Make len_batch a 1-element tensor
-            'edge_index': edge_index.clone().detach(),#torch.tensor(edge_index, dtype=torch.long),  # Assuming it contains indices
-            'batch': batch.clone().detach(), #torch.tensor(batch, dtype=torch.long),  # Assuming it contains indices
-            'edge_seq': edge_seq.clone().detach() #torch.tensor(edge_seq, dtype=torch.float32)  # Adjust dtype based on your data
-
+            'x':          torch.from_numpy(x_batch),
+            'y':          torch.from_numpy(y_batch),
+            'len':        torch.tensor([len_batch], dtype=torch.long),
+            'edge_index': edge_index,
+            'batch':      batch,
+            'edge_seq':   edge_seq
         }
 
     def generate_edge_sequence(self, G):
@@ -759,6 +818,247 @@ class Graph_sequence_sampler_pytorch(torch.utils.data.Dataset):
         max_prev_node = sorted(max_prev_node)[-1*topk:]
         return max_prev_node
 
+class xxGraph_sequence_sampler_pytorch(torch.utils.data.Dataset):
+    def __init__(self, G_list, max_num_node=None, max_prev_node=None, iteration=20000):
+        # 1) Store raw adjacencies and true node counts
+        self.adj_all = [nx.to_numpy_array(G) for G in G_list]
+        self.len_all = [adj.shape[0] for adj in self.adj_all]
+
+        # 2) Compute global max nodes
+        self.n = max_num_node or max(self.len_all)
+
+        # 3) Compute global max_prev_node if needed
+        if max_prev_node is None:
+            candidates = []
+            for _ in range(iteration):
+                adj = self.adj_all[np.random.randint(len(self.adj_all))]
+                perm = np.random.permutation(adj.shape[0])
+                adj_p = adj[np.ix_(perm, perm)]
+                Gp = nx.from_numpy_array(adj_p)
+                start = np.random.randint(adj_p.shape[0])
+                order = np.array(bfs_seq(Gp, start))
+                adj_bfs = adj_p[np.ix_(order, order)]
+                enc = encode_adj(adj_bfs)
+                candidates.append(max(len(r) for r in enc))
+            self.max_prev_node = max(candidates)
+        else:
+            self.max_prev_node = max_prev_node
+
+    def __len__(self):
+        return len(self.adj_all)
+
+    def __getitem__(self, idx):
+        # ————— 1) Permute & BFS-order —
+        adj = self.adj_all[idx].copy()
+        N0  = adj.shape[0]
+        perm = np.random.permutation(N0)
+        adj_p = adj[np.ix_(perm, perm)]
+        Gp = nx.from_numpy_array(adj_p)
+
+        start = np.random.randint(N0)
+        bfs_order = np.array(bfs_seq(Gp, start))
+        adj_bfs = adj_p[np.ix_(bfs_order, bfs_order)]
+        Gb = nx.from_numpy_array(adj_bfs)
+        N = adj_bfs.shape[0]
+
+        # ————— 2) Encode adj into sequence form —
+        adj_encoded = encode_adj(adj_bfs, max_prev_node=self.max_prev_node)  # shape [N, prev_len]
+
+        # ————— 3) Build x_batch & y_batch with zero-padding —
+        x_batch = np.zeros((self.n, self.max_prev_node), dtype=np.float32)
+        y_batch = np.zeros_like(x_batch)
+        x_batch[0, :] = 1.0
+        y_batch[:N, :]        = adj_encoded
+        x_batch[1 : N+1, :]   = adj_encoded
+
+        # ————— 4) Rebuild edge_index to match BFS ordering —
+        inv_map = { old: new for new, old in enumerate(bfs_order) }
+        edge_list = []
+        for u, v in Gb.edges():
+            edge_list.append([inv_map[u], inv_map[v]])
+        edge_index = torch.tensor(edge_list, dtype=torch.long).T.contiguous()  # [2, E]
+
+        # ————— 5) Batch vector for PyG-style pooling (here batch_size=1) —
+        batch = torch.zeros(N, dtype=torch.long)
+
+        # ————— 6) Build edge_seq as a packed Tensor —
+        #    shape before packing: [N, prev_len, 2]
+        raw_seq = []
+        for i in range(N):
+            prev_len = min(i, self.max_prev_node)
+            # take the i-th row adjacency to earlier nodes (reversed)
+            row = list(adj_bfs[i, :i][::-1])
+            # pad/truncate to max_prev_node
+            row = row[:prev_len] + [0] * (self.max_prev_node - prev_len)
+            # pair each “prev-node index” with the current i
+            raw_seq.append([[j, i] for j in range(prev_len)] +
+                           [[0, i] for _ in range(self.max_prev_node - prev_len)])
+        seq_tensor = torch.tensor(raw_seq, dtype=torch.float32)  # [N, prev, 2]
+
+        # Pack it so the decoder’s `pack=True` branch will see a PackedSequence
+        # lengths = [ min(i, max_prev_node) for i in range(N) ]
+        lengths = [ min(i, self.max_prev_node) for i in range(N) ]
+        edge_seq_packed = pack_padded_sequence(
+            seq_tensor,
+            lengths=lengths,
+            batch_first=True,
+            enforce_sorted=True
+        )
+
+        return {
+            'x':          torch.from_numpy(x_batch),       # [n, max_prev_node]
+            'y':          torch.from_numpy(y_batch),       # [n, max_prev_node]
+            'len':        N,                               # scalar
+            'edge_index': edge_index,                      # [2, E]
+            'batch':      batch,                           # [n]
+            'edge_seq':   edge_seq_packed,                 # PackedSequence
+        }
+
+    def generate_edge_sequence(self, adj_matrix):
+        """
+        Turn the BFS-ordered adjacency into an edge-pair sequence of shape [N, <=max_prev_node, 2].
+        If your decoder expects a packed sequence, you may need to pad each row to length max_prev_node.
+        """
+        N = adj_matrix.shape[0]
+        seqs = []
+        for i in range(N):
+            prev_len = min(i, self.max_prev_node)
+            # take the last `prev_len` entries of row i, reversed
+            row = list(adj_matrix[i, :i][::-1])
+            # pad or truncate
+            row = row[:prev_len] + [0] * (self.max_prev_node - prev_len)
+            # pair each with current node index
+            seqs.append([[j, i] for j in range(prev_len)] +
+                        [[0,  i] for _ in range(self.max_prev_node - prev_len)])
+        return seqs
+
+    def calc_max_prev_node(self, iter=20000, topk=10):
+        """
+        Randomly sample `iter` BFS orderings to see the largest observed look-back window.
+        """
+        max_lens = []
+        for i in range(iter):
+            if i % (iter // 5) == 0:
+                print(f'  sampling {i}/{iter}')
+            idx = np.random.randint(len(self.adj_all))
+            adj = self.adj_all[idx]
+            perm = np.random.permutation(adj.shape[0])
+            adj = adj[np.ix_(perm, perm)]
+            G = nx.from_numpy_matr(adj)
+            start = np.random.randint(adj.shape[0])
+            bfs_order = np.array(bfs_seq(G, start))
+            adj_bfs = adj[np.ix_(bfs_order, bfs_order)]
+            enc = encode_adj(adj_bfs)
+            max_lens.append(max(len(row) for row in enc))
+        return sorted(max_lens)[-topk:]
+
+class zxGraph_sequence_sampler_pytorch(torch.utils.data.Dataset):
+    def __init__(self, G_list, max_num_node=None, max_prev_node=None, iteration=20000):
+        """
+        G_list: list of networkx.Graph
+        max_num_node: maximum nodes to pad to (if None, uses largest graph in G_list)
+        max_prev_node: maximum look-back window (if None, estimated via sampling)
+        iteration: sampling trials to estimate max_prev_node
+        """
+        # Store raw adjacency matrices and true node counts
+        self.adj_all = [np.asarray(nx.to_numpy_matrix(G)) for G in G_list]
+        self.len_all = [adj.shape[0] for adj in self.adj_all]
+
+        # Global padding size for number of nodes
+        self.n = max_num_node or max(self.len_all)
+
+        # Estimate max_prev_node if not given
+        if max_prev_node is None:
+            print(f'Estimating max_prev_node over {iteration} samples…')
+            samples = []
+            for _ in range(iteration):
+                idx = np.random.randint(len(self.adj_all))
+                adj = self.adj_all[idx]
+                perm = np.random.permutation(adj.shape[0])
+                adj_p = adj[np.ix_(perm, perm)]
+                Gp = nx.from_numpy_matrix(adj_p)
+                start = np.random.randint(adj_p.shape[0])
+                order = np.array(bfs_seq(Gp, start))
+                adj_bfs = adj_p[np.ix_(order, order)]
+                enc = encode_adj(adj_bfs, max_prev_node=None)
+                samples.append(max(len(r) for r in enc))
+            self.max_prev_node = max(samples)
+            print(f'→ max_prev_node = {self.max_prev_node}')
+        else:
+            self.max_prev_node = max_prev_node
+
+    def __len__(self):
+        return len(self.adj_all)
+
+    def __getitem__(self, idx):
+        # 1) Load and permute original adjacency
+        adj_orig = self.adj_all[idx]
+        N_true  = adj_orig.shape[0]
+
+        perm = np.random.permutation(N_true)
+        adj_p = adj_orig[np.ix_(perm, perm)]
+        Gp    = nx.from_numpy_matrix(adj_p)
+
+        # 2) BFS reorder
+        start = np.random.randint(N_true)
+        bfs_order = np.array(bfs_seq(Gp, start))
+        adj_bfs = adj_p[np.ix_(bfs_order, bfs_order)]
+        Gb = nx.from_numpy_matrix(adj_bfs)
+
+        # 3) Encode adjacency into sequence form
+        adj_enc = encode_adj(adj_bfs.copy(), max_prev_node=self.max_prev_node)
+        # pad/ prepend so adj_enc has exactly N_true rows
+        if adj_enc.shape[0] == N_true - 1:
+            # GraphRNN encode_adj often omits the first row: prepend zeros
+            zero_row = np.zeros((1, self.max_prev_node), dtype=adj_enc.dtype)
+            adj_enc = np.vstack([zero_row, adj_enc])
+        elif adj_enc.shape[0] != N_true:
+            raise RuntimeError(f"encode_adj returned {adj_enc.shape[0]} rows, expected {N_true}")
+
+        # 4) Build x_batch and y_batch with padding up to self.n
+        x_batch = np.zeros((self.n, self.max_prev_node), dtype=np.float32)
+        y_batch = np.zeros_like(x_batch)
+        x_batch[0, :] = 1.0
+        y_batch[:N_true, :]      = adj_enc
+        x_batch[1 : N_true + 1, :] = adj_enc
+
+        # 5) Rebuild edge_index aligned with BFS order
+        inv_map = { old: new for new, old in enumerate(bfs_order) }
+        edges = [[inv_map[u], inv_map[v]] for u, v in Gb.edges()]
+        edge_index = torch.tensor(edges, dtype=torch.long).T.contiguous()  # shape [2, E]
+
+        # 6) Batch vector (all zeros if batch_size=1)
+        batch = torch.zeros(N_true, dtype=torch.long)
+
+        # 7) Build packed edge_seq for decoder
+        #    shape before packing: [N_true, max_prev_node, 2]
+        raw_seq = []
+        for i in range(N_true):
+            prev_len = min(i, self.max_prev_node)
+            # take adjacency row to previous nodes, reversed
+            row = list(adj_bfs[i, :i][::-1])
+            # pad/truncate to length max_prev_node
+            row = row[:prev_len] + [0] * (self.max_prev_node - prev_len)
+            # combine each prev-node index with current node index
+            paired = [[j, i] for j in range(prev_len)]
+            # pad the remainder with dummy (0,i) pairs
+            paired += [[0, i]] * (self.max_prev_node - prev_len)
+            raw_seq.append(paired)
+        seq_tensor = torch.tensor(raw_seq, dtype=torch.float32)  # [N_true, max_prev, 2]
+
+        lengths = [min(i, self.max_prev_node) for i in range(N_true)]
+        edge_seq_packed = pack_padded_sequence(
+            seq_tensor, lengths=lengths, batch_first=True, enforce_sorted=True
+        )
+
+        return {
+            'x':          torch.from_numpy(x_batch),       # [self.n, max_prev_node]
+            'y':          torch.from_numpy(y_batch),       # [self.n, max_prev_node]
+            'len':        N_true,                          # scalar
+            'edge_index': edge_index,                      # [2, E]
+            'batch':      batch,                           # [N_true]
+            'edge_seq':   edge_seq_packed,                 # PackedSequence
+        }
 ########## use pytorch dataloader
 class Graph_sequence_sampler_pytorch_nobfs(torch.utils.data.Dataset):
     def __init__(self, G_list, max_num_node=None):

@@ -1,5 +1,3 @@
-from collections import deque
-
 import networkx as nx
 import numpy as np
 import torch
@@ -12,15 +10,14 @@ from torch import optim
 from torch.optim.lr_scheduler import MultiStepLR
 # import node2vec.src.main as nv
 from sklearn.decomposition import PCA
+from sklearn.manifold import MDS
 import community
 import pickle
 import re
 import os
 import data
 import args
-
-
-
+from args import Args
 def citeseer_ego():
     _, _, G = data.Graph_load(dataset='citeseer')
     G = max(nx.connected_component_subgraphs(G), key=len)
@@ -111,6 +108,7 @@ def perturb(graph_list, p_del, p_add=None):
 
         perturbed_graph_list.append(G)
     return perturbed_graph_list
+
 
 
 def perturb_new(graph_list, p):
@@ -288,7 +286,8 @@ def draw_graph(G, prefix = 'test'):
 #     plt.savefig(fname+'.png', dpi=600)
 #     plt.close()
 
-def draw_graph_list(G_list, row, col, fname='figures/test', layout='spring', is_single=False, k=1, node_size=55, alpha=1, width=1.3):
+def draw_graph_list(G_list, row, col, fname='figures/test', 
+                    layout='spring', is_single=False, k=1, node_size=55, alpha=1, width=1.3):
     # Ensure the 'figures' directory exists
     if not os.path.exists(os.path.dirname(fname)):
         os.makedirs(os.path.dirname(fname))
@@ -305,13 +304,40 @@ def draw_graph_list(G_list, row, col, fname='figures/test', layout='spring', is_
 
         # Ensure that the graph has nodes and edges to prevent errors in layout calculations
         if G.number_of_nodes() > 0:
+            # ---------- new layout options ----------
             if layout == 'spring':
-                #Enes
-                #çıkarıldıpos = nx.spring_layout(G, k=k/np.sqrt(G.number_of_nodes()), iterations=100)
-                pos = nx.spring_layout(G, k=2 / np.sqrt(G.number_of_nodes()), iterations=100)
-                ##EnesSon
+                pos = nx.spring_layout(G, k=k/np.sqrt(G.number_of_nodes()), iterations=100)
+                #pos = nx.spring_layout(G, k=2 / np.sqrt(G.number_of_nodes()), iterations=100)
             elif layout == 'spectral':
                 pos = nx.spectral_layout(G)
+
+            elif layout == 'circular':
+                pos = nx.circular_layout(G)
+
+            elif layout == 'shell':
+                # if you know the two communities, you can pass them in nlist;
+                # here we just put all nodes in one shell
+                pos = nx.shell_layout(G)
+
+
+            elif layout == 'mds':
+                # 1) compute all-pairs shortest-path distance
+                n = G.number_of_nodes()
+                lengths = dict(nx.all_pairs_shortest_path_length(G))
+                D = np.zeros((n, n))
+                for u, dd in lengths.items():
+                    for v, d in dd.items():
+                        D[u, v] = d
+                # 2) run MDS
+                mds = MDS(n_components=2,
+                          dissimilarity='precomputed',
+                          random_state=42)
+                coords = mds.fit_transform(D)
+                # 3) pack into pos dict
+                pos = {node: coords[node] for node in G.nodes()}
+
+            else:
+                raise ValueError(f"Unknown layout: {layout}")
             # Graph is drawn
             graphs_drawn = True
         else:
@@ -546,33 +572,6 @@ def load_graph_list(fname, is_real=True):
 
     return graph_list
 
-####Enes
-def analyze_graph_stats(graphs, label=""):
-    modularities = []
-    clusterings = []
-    num_components = []
-
-    for G in graphs:
-        if G.number_of_nodes() < 2:
-            continue  # Küçük veya boş grafikleri atla
-
-        try:
-            part = community.best_partition(G)
-            mod = community.modularity(part, G)
-            modularities.append(mod)
-        except:
-            pass  # Eğer partition başarısızsa mod eklenmez
-
-        clusterings.append(nx.average_clustering(G))
-        num_components.append(nx.number_connected_components(G))
-
-    print(f"--- {label} ---")
-    print(f"Avg modularity: {np.mean(modularities):.4f} (n={len(modularities)})")
-    print(f"Avg clustering: {np.mean(clusterings):.4f} (n={len(clusterings)})")
-    print(f"Avg #components: {np.mean(num_components):.2f}")
-    print()
-
-###Enes Son
 
 def export_graphs_to_txt(g_list, output_filename_prefix):
     i = 0
@@ -610,71 +609,172 @@ def test_perturbed():
     print([g.number_of_edges() for g in g_perturbed])
 
 ##Drew first graph step by step
+
+
+
 def draw_graph_stages(graph, num_stages=4, fname="figures/stages/stage"):
+
+
     """
+
+
     Grafın oluşum sürecini aşamalı olarak çizer ve tek bir görsele kaydeder.
 
+
+
+
+
     Args:
+
+
         graph: networkx.Graph objesi (tam hali).
+
+
         num_stages: Kaç aşamada graf çizilecek (varsayılan: 4).
+
+
         fname: Kaydedilecek görselin dosya adı (uzantısız).
+
+
     """
+
+
     if not os.path.exists(os.path.dirname(fname)):
+
+
         os.makedirs(os.path.dirname(fname))
 
+
+
+
+
     plt.switch_backend('agg')
+
+
     plt.figure(figsize=(4 * num_stages, 4))
 
+
+
+
+
     all_nodes = list(graph.nodes())
+
+
     nodes_per_stage = len(all_nodes) // num_stages
 
+
+
+
+
     for i in range(num_stages):
+
+
         plt.subplot(1, num_stages, i + 1)
+
+
         plt.axis("off")
 
+
+
+
+
         end_index = (i + 1) * nodes_per_stage if i < num_stages - 1 else len(all_nodes)
+
+
         stage_nodes = all_nodes[:end_index]
+
+
         G_sub = graph.subgraph(stage_nodes).copy()
 
+
+
+
+
         if G_sub.number_of_nodes() == 0:
+
+
             continue
 
+
+
+
+
         pos = nx.spring_layout(G_sub, k=2 / np.sqrt(G_sub.number_of_nodes()), iterations=100)
+
+
         nx.draw_networkx_nodes(G_sub, pos, node_size=40, node_color='#336699', alpha=0.9)
+
+
         nx.draw_networkx_edges(G_sub, pos, alpha=0.4, width=0.6)
+
+
         plt.title(f"Stage {i + 1}\n{G_sub.number_of_nodes()} nodes")
 
+
+
+
+
     plt.tight_layout()
+
+
     plt.savefig(fname + ".png", dpi=300)
+
+
     plt.close()
 
+####Enes
+def analyze_graph_stats(graphs, label=""):
+    modularities = []
+    clusterings = []
+    num_components = []
+
+    for G in graphs:
+        if G.number_of_nodes() < 2:
+            continue  # Küçük veya boş grafikleri atla
+
+        try:
+            part = community.best_partition(G)
+            mod = community.modularity(part, G)
+            modularities.append(mod)
+        except:
+            pass  # Eğer partition başarısızsa mod eklenmez
+
+        clusterings.append(nx.average_clustering(G))
+        num_components.append(nx.number_connected_components(G))
+
+    print(f"--- {label} ---")
+    print(f"Avg modularity: {np.mean(modularities):.4f} (n={len(modularities)})")
+    print(f"Avg clustering: {np.mean(clusterings):.4f} (n={len(clusterings)})")
+    print(f"Avg #components: {np.mean(num_components):.2f}")
+    print()
+
+###Enes Son
 
 if __name__ == '__main__':
     #test_perturbed()
-    
+    args = Args()
     graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_train_0.dat')
-    print(f"Loaded {len(graphs)} graphs")
+
     
     for i in range(0, 160, 16):
-        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/train/train_community2_DEC_' + str(i))
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/train/community2_DEC_' + str(i))
     
     graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_test_0.dat')
-    print(f"Loaded {len(graphs)} graphs")
+
     
     for i in range(0, 160, 16):
-        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/test/test_community2_DEC_' + str(i))
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/test/community2_DEC_' + str(i))
     
-    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_pred_20.dat')
-    print(f"Loaded {len(graphs)} graphs")
-
+    graphs = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_pred_'+ str(args.epochs) +'.dat')
+    draw_graph_stages(graphs[0], num_stages=4, fname="figures/stages/example_pred0")
+    
     for i in range(0, 160, 16):
-        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/pred/pred_community2_DEC_20_' + str(i))
-
+        draw_graph_list(graphs[i:i+16], 4, 4, fname='figures/pred/mzm_community2_DEC_'+ str(args.epochs) +'_' + str(i), k=1)
+    
     graphs_train = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_train_0.dat')
     analyze_graph_stats(graphs_train, label="TRAIN")
 
-    graphs_pred = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_pred_20.dat')
+    graphs_pred = load_graph_list('graphs/' + 'GraphRNN_DEC_community2_4_128_pred_'+ str(args.epochs) +'.dat')
     analyze_graph_stats(graphs_pred, label="PRED")
 
-    graphs = load_graph_list("graphs/GraphRNN_DEC_community2_4_128_pred_20.dat")
-    draw_graph_stages(graphs[0], num_stages=4, fname="figures/stages/example_pred0")
+    

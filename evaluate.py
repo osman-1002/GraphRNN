@@ -3,7 +3,7 @@ import numpy as np
 import os
 import re
 from random import shuffle
-
+import pickle
 import eval.stats
 import utils
 # import main.Args
@@ -19,15 +19,15 @@ class Args_evaluate():
 
         # list of dataset to evaluate
         # use a list of 1 element to evaluate a single dataset
-        self.dataset_name_all = ['community4']
+        self.dataset_name_all = ['community2']
         #self.dataset_name_all = ['caveman', 'grid', 'barabasi', 'citeseer', 'DD']
         # self.dataset_name_all = ['citeseer_small','caveman_small']
         # self.dataset_name_all = ['barabasi_noise0','barabasi_noise2','barabasi_noise4','barabasi_noise6','barabasi_noise8','barabasi_noise10']
         # self.dataset_name_all = ['caveman_small', 'ladder_small', 'grid_small', 'ladder_small', 'enzymes_small', 'barabasi_small','citeseer_small']
 
         self.epoch_start=1
-        self.epoch_end=11
-        self.epoch_step=1
+        self.epoch_end=19
+        self.epoch_step=9
 
 def find_nearest_idx(array,value):
     idx = (np.abs(array-value)).argmin()
@@ -203,12 +203,17 @@ def evaluation_epoch(dir_input, fname_output, model_name, dataset_name, args, is
         if 'GraphRNN' in model_name:
             # read test graph
             for epoch in range(epoch_start,epoch_end,epoch_step):
-                for sample_time in range(1,4):
+                #for sample_time in range(1,4):
                     # get filename
-                    fname_pred = dir_input + model_name + '_' + dataset_name + '_' + str(args.num_layers) + '_' + str(hidden) + '_pred_' + str(epoch) + '_' + str(sample_time) + '.dat'
+                    fname_pred = dir_input + model_name + '_' + dataset_name + '_' + str(args.num_layers) + '_' + str(hidden) + '_pred_' + str(epoch) + '.dat'
                     # load graphs
                     try:
-                        graph_pred = utils.load_graph_list(fname_pred,is_real=False) # default False
+                        if 'DEC' in model_name:
+                            # load raw pickle, no CC‑pruning
+                            with open(fname_pred, 'rb') as fin:
+                                graph_pred = pickle.load(fin)
+                        else:
+                            graph_pred = utils.load_graph_list(fname_pred, is_real=False)
                     except:
                         print('Not found: '+ fname_pred)
                         logging.warning('Not found: '+ fname_pred)
@@ -244,7 +249,7 @@ def evaluation_epoch(dir_input, fname_output, model_name, dataset_name, args, is
                     except:
                         mmd_4orbits_validate = -1
                     # write results
-                    f.write(str(sample_time)+','+
+                    f.write(str(1)+','+
                             str(epoch)+','+
                             str(mmd_degree_validate)+','+
                             str(mmd_clustering_validate)+','+
